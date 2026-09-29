@@ -14,6 +14,8 @@ built with); paths below are in that repo, as of branch `pacman-launch-eproms`
   compiler, what it does, and what it is based on
 - [docs/lockstep.md](docs/lockstep.md): how the port is checked against MAME's own
   Pac-Man, and the results (6000 frames: registers, board, sound, memory, pictures)
+- [docs/mame.md](docs/mame.md): `mame/`, the MAME used, cut down to the files the Model 2
+  and Pac-Man builds need, and how to build it
 
 ## The three EPROMs
 
@@ -58,12 +60,12 @@ The sound EPROM needs no 68000 toolchain: its 304-byte program is committed
 
 ## Running
 
-MAME (a build with the Model 2 driver; `m2sharc` for the real SHARC path): put the three
+MAME (build the one in [`mame/`](docs/mame.md); it has the real-SHARC fixes): put the three
 files in a folder named `sfight` and list it before the folder with the stock
 `sfight.zip`, `schamp.zip` and `segabill.zip`:
 
 ```sh
-M2_HLE_GEO_OFF=1 mame sfight -rompath "/path/with/sfight-folder;/path/to/stock/roms" -window
+M2_HLE_GEO_OFF=1 mame/m2pac sfight -rompath "/path/with/sfight-folder;/path/to/stock/roms" -window -video soft
 ```
 
 MAME reports WRONG CHECKSUMS for exactly those three files; that is expected. Leave out
