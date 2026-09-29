@@ -8,7 +8,7 @@ are swapped, everything else on the board, or in the romset, is stock.
 This repository documents the port. The code lives in
 [m2-sdk](https://github.com/biggestsonicfan/m2-sdk) (the Model 2 homebrew SDK it is
 built with); paths below are in that repo, as of branch `pacman-launch-eproms`
-(commit `57de444`, PR #10).
+(commit `ec584ac`, PR #10).
 
 - [docs/sound.md](docs/sound.md): the sound EPROM, how it was made without a 68000
   compiler, what it does, and what it is based on
