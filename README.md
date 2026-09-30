@@ -8,7 +8,8 @@ are swapped, everything else on the board, or in the romset, is stock.
 This repository documents the port. The code lives in
 [m2-sdk](https://github.com/biggestsonicfan/m2-sdk) (the Model 2 homebrew SDK it is
 built with); paths below are in that repo, as of branch `pacman-launch-eproms`
-(commit `ec584ac`, PR #10).
+(commit `ec584ac`, PR #10). Running in m2emulator also needs m2-sdk
+[PR #12](https://github.com/biggestsonicfan/m2-sdk/pull/12) (branch `m2emulator-fixes`).
 
 - [docs/sound.md](docs/sound.md): the sound EPROM, how it was made without a 68000
   compiler, what it does, and what it is based on
@@ -16,6 +17,9 @@ built with); paths below are in that repo, as of branch `pacman-launch-eproms`
   Pac-Man, and the results (6000 frames: registers, board, sound, memory, pictures)
 - [docs/mame.md](docs/mame.md): `mame/`, the MAME used, cut down to the files the Model 2
   and Pac-Man builds need, and how to build it
+- [docs/m2emulator.md](docs/m2emulator.md): running in m2emulator, the two emulator bugs
+  that stopped it (a UART that always has a byte, shift counts masked to 5 bits), how
+  they were found, and the fixes
 
 ## The three EPROMs
 
@@ -78,6 +82,10 @@ stock one; the game then runs silent).
 Controls (Model 2 -> Pac-Man): P1 stick, P2 stick, COIN 1/2 = coins, START 1/2, SERVICE =
 a credit. Pac-Man is silent until a coin goes in, as on the real machine. No cocktail flip.
 
+m2emulator: copy the three `roms/pacman/` files into its `roms\sfight` folder and run
+`EMULATOR.EXE sfight`. It needs a build with m2-sdk PR #12, and it is silent there (`NO
+SOUND`); see [docs/m2emulator.md](docs/m2emulator.md).
+
 ## How it works, briefly
 
 - **Z80:** `src/m2_z80.h`, an interpreter that passes zexdoc (67/67), plus
@@ -98,6 +106,7 @@ a credit. Pac-Man is silent until a coin goes in, as on the real machine. No coc
 
 - Byte-for-byte in lockstep with MAME's own `pacman` driver over 6000 frames, down to
   the Z80's R register; see [docs/lockstep.md](docs/lockstep.md).
-- Runs in MAME (native and web). **Not yet tried on real hardware or in m2emulator.**
+- Runs in MAME (native and web), and in m2emulator without sound (with m2-sdk PR #12;
+  see [docs/m2emulator.md](docs/m2emulator.md)). **Not yet tried on real hardware.**
   The sound EPROM in particular rests on MAME's model of the sound board (see
   [docs/sound.md](docs/sound.md#on-real-hardware)).
