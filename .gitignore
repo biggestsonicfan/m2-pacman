@@ -1,0 +1,11 @@
+build/
+roms/
+*.o
+*.elf
+game.map
+
+# ROM-derived data: pack your own (tools/pacrom.py, tools/z80recomp.py), never commit
+src/pacman_roms.h
+src/puckman_roms.h
+src/pacman_recomp.h
+src/puckman_recomp.h

@@ -6,7 +6,7 @@ the sound chip's registers, what the SCSP is told to play, the audio, and the pi
 
 ## How
 
-`m2-sdk/tools/lockstep/`:
+`tools/lockstep/`:
 
 - `inputs.lua`: one input script for both: a coin and a start every 3000 frames, and a
   new pseudo-random stick direction every 17 frames.

@@ -3,14 +3,15 @@
 The `pacman` EPROM set runs in m2emulator (ElSemi's Model 2 emulator, 1.1a): it boots to
 the attract mode and plays at full speed. It is silent there (see [Sound](#sound)).
 
-It needs two fixes in m2-sdk, [PR #12](https://github.com/biggestsonicfan/m2-sdk/pull/12)
-(branch `m2emulator-fixes`). Both work around bugs in m2emulator, not in the port: with
+It needs two fixes, first made in m2-sdk
+[PR #12](https://github.com/biggestsonicfan/m2-sdk/pull/12) and now part of this repository
+(`tools/emu_shro.py`, `src/m2_scsp.h`). Both work around bugs in m2emulator, not in the port: with
 or without them the set runs the same in MAME, and a real board should too.
 
 ## Running it
 
 Build `M2_GAME=pacman` (not `pacman_web`, whose `sinr` idle needs an i960 FPU that
-m2emulator does not have) with m2-sdk at PR #12 or later, and copy the three files over
+m2emulator does not have), and copy the three files over
 the stock set in m2emulator's `roms\sfight` folder:
 
 ```
@@ -78,7 +79,7 @@ the lockstep never saw it). **m2emulator masks the shift count to its low 5 bits
 x86 does, so `1 >> 32` is `1 >> 0` = 1: every non-zero multiple of 32 tests as zero. The
 build has 156 of these `x == 0` tests, most of them in the Z80 core's flag code.
 
-GCC has no option to avoid the pattern, so m2-sdk now rewrites it after compiling:
+GCC has no option to avoid the pattern, so the build now rewrites it after compiling:
 `tools/emu_shro.py` runs as the C compiler launcher (CMake option `M2_EMU_SHRO`, on by
 default), compiles each file to assembly, and replaces each `shro reg,1,reg` with a
 sequence that gives the same result on all three targets:

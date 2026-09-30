@@ -18,7 +18,7 @@ sound logic is i960 C. So no knowledge of the original audio driver is needed.
 ## How it was made (no compiler)
 
 The program is **hand-written 68000 assembly**, 132 lines:
-`m2-sdk/snd/scsp_passthru.s`. It is built with the GNU assembler and linker for m68k
+`snd/scsp_passthru.s`. It is built with the GNU assembler and linker for m68k
 (Ubuntu package `binutils-m68k-linux-gnu`; binutils only, no gcc):
 
 ```sh
@@ -28,7 +28,7 @@ python3 tools/snd2rom.py snd/scsp_passthru.bin roms/      # -> roms/epr-19021.31
 ```
 
 - The result, `snd/scsp_passthru.bin` (304 bytes), is committed, so an ordinary build never
-  needs the m68k tools; m2-sdk's CMake has a `snd` target that re-runs the first two lines
+  needs the m68k tools; the CMake build has a `snd` target that re-runs the first two lines
   when they are installed. Any m68k binutils works (for example an `m68k-elf` build on
   Windows).
 - `tools/snd2rom.py` makes the EPROM image: pads the program to 512 KB with `FF`, and
@@ -66,7 +66,7 @@ costs one packet, never the stream.
 
 ## The i960 side
 
-`m2-sdk/src/m2_scsp.h`:
+`src/m2_scsp.h`:
 
 - `m2_scsp_init()` brings the UART up (async 8-N-1).
 - `m2_scsp_probe(frames)` pings and waits for `0x5A`. Only if it answers does the game
@@ -78,7 +78,7 @@ costs one packet, never the stream.
 
 ## Pac-Man's sound on the SCSP
 
-`m2-sdk/src/pacman.c` (`pac_sound_init`, `pac_sound_update`):
+`src/pacman.c` (`pac_sound_init`, `pac_sound_update`):
 
 - **At boot:** the eight 32-sample waveforms of Pac-Man's sound PROM (`1m`) go to sound
   RAM at `0x1000`, 4-bit unsigned converted to 16-bit signed. SCSP slots 0-2 are set to
