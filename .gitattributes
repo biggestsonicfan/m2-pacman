@@ -1,1 +1,2 @@
 mame/** -text
+*.sh text eol=lf

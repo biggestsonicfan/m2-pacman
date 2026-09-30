@@ -5,16 +5,17 @@ the board's Intel i960KB, with the Z80 emulated in software and the sound played
 Model 2's own SCSP. It runs as a replacement for Sonic the Fighters (`sfight`): three EPROMs
 are swapped, everything else on the board, or in the romset, is stock.
 
-This repository documents the port. The code lives in
-[m2-sdk](https://github.com/biggestsonicfan/m2-sdk) (the Model 2 homebrew SDK it is
-built with); paths below are in that repo, as of branch `pacman-launch-eproms`
-(commit `ec584ac`, PR #10). Running in m2emulator also needs m2-sdk
-[PR #12](https://github.com/biggestsonicfan/m2-sdk/pull/12) (branch `m2emulator-fixes`).
+This repository has the port and its documentation: the game (`src/`), its Z80 core
+and SCSP relay, the sound board program (`snd/`) and the tools (`tools/`). It is built
+against [m2-sdk](https://github.com/biggestsonicfan/m2-sdk), the bare Model 2 homebrew
+SDK (headers, i960 boot code, linker script), checked out beside this repository.
 
 - [docs/sound.md](docs/sound.md): the sound EPROM, how it was made without a 68000
   compiler, what it does, and what it is based on
 - [docs/lockstep.md](docs/lockstep.md): how the port is checked against MAME's own
   Pac-Man, and the results (6000 frames: registers, board, sound, memory, pictures)
+- [docs/port.md](docs/port.md): the port in detail: speed, the static recompiler,
+  colours, sound, the web build, standalone EPROMs, the SHARC firmware
 - [docs/mame.md](docs/mame.md): `mame/`, the MAME used, cut down to the files the Model 2
   and Pac-Man builds need, and how to build it
 - [docs/m2emulator.md](docs/m2emulator.md): running in m2emulator, the two emulator bugs
@@ -31,7 +32,7 @@ A board, MAME or m2emulator runs the stock `sfight` set with these three files r
 | `epr-19002.16` | i960 program, second half | the same |
 | `epr-19021.31` | sound board 68000 program | `snd/scsp_passthru.s` (see [docs/sound.md](docs/sound.md)) |
 
-The build writes two sets (in `m2-sdk/roms/`):
+The build writes two sets (in `roms/`):
 
 - **`roms/pacman/`**: boots the real SHARC coprocessor and geometrizer like any sfight-based
   game (Sonic the Fighters' own SHARC programs), and runs its frame loop alongside the game.
@@ -46,15 +47,18 @@ EPROMs; none of it is in either repository (`tools/pacrom.py` reads your `pacman
 
 ## Building
 
-Needs the i960-elf GCC toolchain (see m2-sdk's README) and Python 3.
+Needs the i960-elf GCC toolchain (see m2-sdk's README), Python 3, and
+[m2-sdk](https://github.com/biggestsonicfan/m2-sdk) checked out beside this repository
+(`../m2-sdk`; else `-DM2_SDK=path`). The SHARC firmware headers (`cpres1.h`, `cpres2.h`)
+go in m2-sdk's `src/` (see [docs/port.md](docs/port.md#the-sharc-firmware)); without them
+`pacman` builds without the SHARC boot.
 
 ```sh
-cd m2-sdk
 python3 tools/pacrom.py path/to/pacman.zip          # -> src/pacman_roms.h (Namco data, git-ignored)
 # optional, recommended: the statically recompiled Z80 code
 cc -O2 -Isrc -o pactrace tools/pactrace.c && ./pactrace > trace.txt
 python3 tools/z80recomp.py src/pacman_roms.h trace.txt src/pacman_recomp.h
-cmake -G "Unix Makefiles" -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-i960-elf.cmake -DM2_GAME=pacman
+cmake -G "Unix Makefiles" -B build -DM2_GAME=pacman     # uses m2-sdk's i960-elf toolchain file
 make -C build -j2                                    # -> roms/pacman/ (M2_GAME=pacman_web -> roms/pacman_web/)
 ```
 
@@ -83,7 +87,7 @@ Controls (Model 2 -> Pac-Man): P1 stick, P2 stick, COIN 1/2 = coins, START 1/2, 
 a credit. Pac-Man is silent until a coin goes in, as on the real machine. No cocktail flip.
 
 m2emulator: copy the three `roms/pacman/` files into its `roms\sfight` folder and run
-`EMULATOR.EXE sfight`. It needs a build with m2-sdk PR #12, and it is silent there (`NO
+`EMULATOR.EXE sfight`. It is silent there (`NO
 SOUND`); see [docs/m2emulator.md](docs/m2emulator.md).
 
 ## How it works, briefly
@@ -95,7 +99,7 @@ SOUND`); see [docs/m2emulator.md](docs/m2emulator.md).
 - **Board:** `src/pacman_hw.h`: memory map, the 74LS259 latch, the level-held vblank
   IRQ and IM 2 vector as MAME's driver has them, inputs, and tile + sprite video.
 - **Video:** Pac-Man's 224x288 portrait screen sits in the Model 2's System 24 tile plane
-  (`src/m2_tilefb.h`); each frame only the changed 8x8 cells are copied.
+  (m2-sdk's `m2_tilefb.h`); each frame only the changed 8x8 cells are copied.
 - **Timing:** Pac-Man runs at 60.61 Hz, the Model 2 refreshes at 57.52 Hz, so about every
   19th vblank runs two Pac-Man frames (drawing only the second): game time matches the
   real board.
@@ -106,7 +110,6 @@ SOUND`); see [docs/m2emulator.md](docs/m2emulator.md).
 
 - Byte-for-byte in lockstep with MAME's own `pacman` driver over 6000 frames, down to
   the Z80's R register; see [docs/lockstep.md](docs/lockstep.md).
-- Runs in MAME (native and web), and in m2emulator without sound (with m2-sdk PR #12;
-  see [docs/m2emulator.md](docs/m2emulator.md)). **Not yet tried on real hardware.**
+- Runs in MAME (native and web), and in m2emulator without sound (see [docs/m2emulator.md](docs/m2emulator.md)). **Not yet tried on real hardware.**
   The sound EPROM in particular rests on MAME's model of the sound board (see
   [docs/sound.md](docs/sound.md#on-real-hardware)).
