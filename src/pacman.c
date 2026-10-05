@@ -247,6 +247,15 @@ static void pac_num(char *s, u32 v, int w) {
     s[w] = 0;
 }
 
+/* The panel on the left. -DPAC_NO_PANEL leaves it out: the game alone (the Dreamcast disc). */
+#ifdef PAC_NO_PANEL
+#define pac_panel(y, s)     ((void)0)
+#define pac_panel_clear(y)  ((void)0)
+#else
+#define pac_panel(y, s)     tfb_text(8, y, s, (u8)ink, -1)
+#define pac_panel_clear(y)  tfb_fillrect(8, y, 5 * 8, 8, 0)
+#endif
+
 int main(void) {
     int i, ink = 1, best = -1, late = 0, skipped = 0;
     u32 last, t0, frames = 0, tick = 0;
@@ -270,17 +279,17 @@ int main(void) {
     pac_geo_sprites_init();
 #endif
 
-    tfb_text(8, 64, PAC_TITLE, (u8)ink, -1);
-    tfb_text(8, 80, "Z80 ON I960", (u8)ink, -1);
+    pac_panel(64, PAC_TITLE);
+    pac_panel(80, "Z80 ON I960");
 #ifdef PAC_SHARC
-    tfb_text(8, 96, "STF SHARC", (u8)ink, -1);
+    pac_panel(96, "STF SHARC");
 #endif
 #ifdef PAC_GEO_SPRITES
-    tfb_text(8, 168, "GEO SPRITES", (u8)ink, -1);
+    pac_panel(168, "GEO SPRITES");
 #endif
-    tfb_text(8, 112, "SPEED", (u8)ink, -1);
+    pac_panel(112, "SPEED");
     pac_sound_init();
-    tfb_text(8, 152, pac_snd_ok ? "SCSP SOUND" : "NO SOUND", (u8)ink, -1);
+    pac_panel(152, pac_snd_ok ? "SCSP SOUND" : "NO SOUND");
 
     last = t0 = frameVBL;
     for (;;) {
@@ -324,8 +333,8 @@ int main(void) {
         if (last - t0 >= 60) {         /* speed = emulated frames vs real Pac-Man time */
             pac_num(buf, frames * (100000u * (M2_HZ / 8u) / (PAC_HZ / 8u)) / ((last - t0) * 1000u), 3);
             buf[3] = '%'; buf[4] = 0;
-            tfb_fillrect(8, 128, 5 * 8, 8, 0);
-            tfb_text(8, 128, buf, (u8)ink, -1);
+            pac_panel_clear(128);
+            pac_panel(128, buf);
             frames = 0; t0 = last;
         }
     }
