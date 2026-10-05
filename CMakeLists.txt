@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 # boot/IRQ assembly, linker script and ROM splitter). The game, its Z80 core, the SCSP
 # relay and the tools are all here.
 #
-#   cmake -G "Unix Makefiles" -B build -DM2_GAME=pacman     (pacman, pacman_web, puckman)
+#   cmake -G "Unix Makefiles" -B build -DM2_GAME=pacman     (pacman, pacman_geo, pacman_web, puckman)
 #   make -C build -j2                                       -> roms/<M2_GAME>/
 #
 # m2-sdk is expected beside this checkout (-DM2_SDK=<path> otherwise); its i960-elf
@@ -19,7 +19,7 @@ endif()
 
 project(m2_pacman C ASM)
 
-set(M2_GAME "pacman" CACHE STRING "Which src/<game>.c to build (pacman pacman_web puckman)")
+set(M2_GAME "pacman" CACHE STRING "Which src/<game>.c to build (pacman pacman_geo pacman_web puckman)")
 if(NOT EXISTS "${CMAKE_SOURCE_DIR}/src/${M2_GAME}.c")
     message(FATAL_ERROR "SOURCE NOT FOUND: src/${M2_GAME}.c")
 endif()

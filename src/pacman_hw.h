@@ -295,6 +295,13 @@ static void pac_draw_sprite(int n, int sx, int sy) {
     }
 }
 
+/* sprite n's top-left in native coordinates (MAME pacman: 272-x, y-31, sprites 0..2 one
+ * pixel over); pac_draw_sprite maps that to portrait */
+static void pac_sprite_pos(int n, int *sx, int *sy) {
+    *sx = 272 - pac_spr_xy[2 * n + 1];
+    *sy = pac_spr_xy[2 * n] - 31 + (n < 3);              /* MAME xoffsethack */
+}
+
 /* Build this frame: redraw changed cells and the cells last frame's sprites covered,
  * then draw the sprites on top (MAME order: 7..3, then 2..0 one pixel over). */
 static void pac_render(void) {
@@ -313,12 +320,16 @@ static void pac_render(void) {
         for (c = 0; c < PAC_CELLS; c++) pac_spr_mark[c] = 0;
         pac_spr_stamp = 1;
     }
+#ifndef PAC_GEO_SPRITES                                  /* else the host draws them as polygons */
     for (n = 7; n >= 0; n--) {
-        int sx = 272 - pac_spr_xy[2 * n + 1], sy = pac_spr_xy[2 * n] - 31;
-        if (n < 3) sy += 1;                              /* MAME xoffsethack */
+        int sx, sy;
+        pac_sprite_pos(n, &sx, &sy);
         pac_draw_sprite(n, sx, sy);
         pac_draw_sprite(n, sx - 256, sy);                /* wraparound */
     }
+#else
+    (void)n;
+#endif
 }
 
 /* One video frame: the Z80 runs a frame's worth of cycles, then vblank raises the IRQ (if
