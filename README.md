@@ -41,8 +41,13 @@ The build writes two sets (in `roms/`):
   `sinr` instruction, so MAME has far less to emulate (in a browser it is the difference
   between ~17% and full speed). Use it for **MAME** and the Pinboard web launch. The `sinr`
   idle needs the i960's FPU, so it is not meant for m2emulator.
+- **`roms/pacman_geo/`**: `roms/pacman/` with the sprites drawn as textured GEO polygons
+  (m2-sdk `m2_sprite.h`) instead of plotted into the tile plane's chars, so char RAM only
+  changes when a tile does. Meant for emulators that draw the GEO on a GPU (m2-hle2's
+  Dreamcast build). Runs in MAME, built-in GEO and the real one (`M2_HLE_GEO_OFF`); the
+  sprites do not show on m2emulator, which draws no GEO direct-data polygons.
 
-The sound EPROM is the same file in both. The Namco ROM data is compiled into the program
+The sound EPROM is the same file in all of them. The Namco ROM data is compiled into the program
 EPROMs; none of it is in either repository (`tools/pacrom.py` reads your `pacman.zip`).
 
 ## Building
@@ -59,7 +64,7 @@ python3 tools/pacrom.py path/to/pacman.zip          # -> src/pacman_roms.h (Namc
 cc -O2 -Isrc -o pactrace tools/pactrace.c && ./pactrace > trace.txt
 python3 tools/z80recomp.py src/pacman_roms.h trace.txt src/pacman_recomp.h
 cmake -G "Unix Makefiles" -B build -DM2_GAME=pacman     # uses m2-sdk's i960-elf toolchain file
-make -C build -j2                                    # -> roms/pacman/ (M2_GAME=pacman_web -> roms/pacman_web/)
+make -C build -j2                                    # -> roms/pacman/ (M2_GAME=pacman_web / pacman_geo -> roms/<game>/)
 ```
 
 `src/puckman.c` builds the Namco Puck Man set the same way (`puckman.zip`, `roms/puckman/`).

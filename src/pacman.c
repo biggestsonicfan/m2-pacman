@@ -22,6 +22,9 @@
  * Build:  cmake -B build -DM2_GAME=pacman
  */
 #include "m2.h"
+#ifdef PAC_GEO_SPRITES
+#define TFB_PRIO 0                     /* tile plane below the polygons: the sprites go on top */
+#endif
 #include "m2_tilefb.h"
 #include "m2_scsp.h"
 
@@ -34,6 +37,12 @@
 #if !defined(PAC_NO_SHARC) && __has_include("cpres1.h") && __has_include("cpres2.h")
 #define PAC_SHARC 1
 #include "m2_obj.h"                    /* m2_silicon_boot, m2_frame_begin/commit/end */
+#endif
+#ifdef PAC_GEO_SPRITES
+#ifndef PAC_SHARC
+#error "PAC_GEO_SPRITES draws through the GEO: it needs the SHARC firmware (src/cpres1.h, cpres2.h)"
+#endif
+#include "m2_sprite.h"
 #endif
 
 #ifndef PAC_ROMS                       /* src/puckman.c picks the other set */
@@ -173,6 +182,53 @@ static inline void pac_idle(void) {
 }
 #endif
 
+#ifdef PAC_GEO_SPRITES
+/* Sprites as GEO polygons (m2-sdk m2_sprite.h) instead of pixels plotted into the tile plane:
+ * the 64 patterns go to texture RAM once, turned to portrait, one mask per pen; each frame a
+ * sprite is one textured quad per visible pen. The char RAM then only changes when a tile
+ * does, and an emulator that draws the GEO on a GPU (m2-hle2's Dreamcast build) gets them as
+ * polygons. Pac-Man colour i is colorbase PAC_SPR_CB + i. */
+#define PAC_SPR_CB 16
+static int pac_spr_id[64];
+
+static void pac_geo_sprites_init(void) {
+    static u8 pix[16 * 16];
+    int c, r, k;
+    m2_spr_flat_colors();              /* exact colorbase colours, as the tile palette's */
+    for (c = 0; c < 16; c++) {
+        u8 rr, g, b;
+        pac_palette_rgb(c, &rr, &g, &b);
+        m2_spr_color((u32)(PAC_SPR_CB + c), M2_RGB(rr >> 3, g >> 3, b >> 3));
+    }
+    /* portrait, as pac_draw_sprite: screen row r = native column, screen column k = 15 - native row */
+    for (c = 0; c < 64; c++) {
+        for (r = 0; r < 16; r++)
+            for (k = 0; k < 16; k++) pix[r * 16 + k] = pac_sprpat[c][15 - k][r];
+        pac_spr_id[c] = m2_spr_load(pix, 16, 16, 16);
+    }
+}
+
+/* this frame's sprites, 7..0 so sprite 0 ends up in front (MAME order), clipped like
+ * pac_draw_sprite to portrait rows 16..271; called between m2_frame_begin and commit */
+static void pac_geo_sprites(void) {
+    int n, p, x0 = PAC_COL0 * 8, y0 = PAC_ROW0 * 8;
+    u16 pens[16] = { 0 };
+    m2_spr_frame_setup();
+    m2_spr_clip(x0, y0 + 16, x0 + PAC_W, y0 + PAC_H - 16);
+    for (n = 7; n >= 0; n--) {
+        u8 attr = pac_ram[0xff0 + 2 * n];
+        const u8 *col = pac_colour[pac_ram[0xff1 + 2 * n] & 0x1f];
+        u32 flags = ((attr & 2) ? M2_SPR_FLIPX : 0u) | ((attr & 1) ? M2_SPR_FLIPY : 0u);
+        int sx, sy, x;
+        pac_sprite_pos(n, &sx, &sy);
+        for (p = 1; p < 4; p++) pens[p] = col[p] ? (u16)(PAC_SPR_CB + col[p]) : 0;   /* index 0 is clear */
+        x = x0 + PAC_W - 16 - sy;
+        m2_spr_draw(pac_spr_id[attr >> 2], x, y0 + sx, flags, pens, 0);
+        m2_spr_draw(pac_spr_id[attr >> 2], x, y0 + sx - 256, flags, pens, 0);   /* wraparound */
+    }
+}
+#endif
+
 /* copy the changed cells of pac_fb into their char blocks */
 static void pac_blit(void) {
     int i, y;
@@ -209,11 +265,17 @@ int main(void) {
         tfb_setcolor((u8)i, M2_RGB(r >> 3, g >> 3, b >> 3));
         if (r + g + b > best) { best = r + g + b; ink = i; }
     }
+#ifdef PAC_GEO_SPRITES
+    pac_geo_sprites_init();
+#endif
 
     tfb_text(8, 64, PAC_TITLE, (u8)ink, -1);
     tfb_text(8, 80, "Z80 ON I960", (u8)ink, -1);
 #ifdef PAC_SHARC
     tfb_text(8, 96, "STF SHARC", (u8)ink, -1);
+#endif
+#ifdef PAC_GEO_SPRITES
+    tfb_text(8, 168, "GEO SPRITES", (u8)ink, -1);
 #endif
     tfb_text(8, 112, "SPEED", (u8)ink, -1);
     pac_sound_init();
@@ -231,11 +293,18 @@ int main(void) {
         for (n = 0; tick >= M2_HZ; n++) tick -= M2_HZ;
         for (k = 0; k < n; k++) {
             pac_read_inputs();
+#if defined(PAC_GEO_SPRITES)
+            pac_frame(render && k == n - 1);
+            m2_frame_begin();          /* the sprites, as polygons */
+            pac_geo_sprites();
+            m2_frame_commit();
+#else
 #ifdef PAC_SHARC
             m2_frame_begin();          /* an empty GEO frame: keeps the SHARC's frame loop going */
             m2_frame_commit();
 #endif
             pac_frame(render && k == n - 1);
+#endif
             pac_sound_update();
             frames++;
         }
