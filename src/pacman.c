@@ -42,6 +42,7 @@
 #ifndef PAC_SHARC
 #error "PAC_GEO_SPRITES draws through the GEO: it needs the SHARC firmware (src/cpres1.h, cpres2.h)"
 #endif
+#define M2_SPR_COP                     /* quads through the COP: m2emulator draws no DIRECT data */
 #include "m2_sprite.h"
 #endif
 
