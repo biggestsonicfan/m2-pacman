@@ -44,8 +44,8 @@ The build writes two sets (in `roms/`):
 - **`roms/pacman_geo/`**: `roms/pacman/` with the sprites drawn as textured GEO polygons
   (m2-sdk `m2_sprite.h`) instead of plotted into the tile plane's chars, so char RAM only
   changes when a tile does. Meant for emulators that draw the GEO on a GPU (m2-hle2's
-  Dreamcast build). Runs in MAME, built-in GEO and the real one (`M2_HLE_GEO_OFF`); the
-  sprites do not show on m2emulator, which draws no GEO direct-data polygons.
+  Dreamcast build). The quads go through the COP (`M2_SPR_COP`), as m2emulator needs: it
+  draws no GEO direct-data polygons. Runs in m2emulator and MAME.
 
 The sound EPROM is the same file in all of them. The Namco ROM data is compiled into the program
 EPROMs; none of it is in either repository (`tools/pacrom.py` reads your `pacman.zip`).
