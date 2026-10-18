@@ -110,8 +110,19 @@ COIN1/2, START1/2, SERVICE = credit.
 - **High score:** Pac-Man's board has no NVRAM; its ROM clears work RAM at power-on and the
   high score goes with it. The Model 2B has 16 KB of battery-backed SRAM at `0x01d00000`
   (MAME `backup1`, saved as `sfight.nv` in `-nvram_directory`), so `src/pacman.c` keeps the
-  score there: the last 16 bytes hold `"PACH"`, the three BCD bytes the ROM keeps at
-  `0x4e88-0x4e8a`, and a checksum (STF's own records are at the start of that RAM).
+  score there, over STF's header. STF keeps its settings, rankings and bookkeeping in
+  `0x3000`-`0x3fff` and checks only that header: a word at `0x3300` and
+  `"SONICTHEFIGHTER"` (in swapped words) at `0x3308`. With either broken it initializes
+  the whole SRAM at boot; otherwise it keeps all of it, bytes it does not know included.
+  So the record is `"PACH"` at `0x3300`, the three BCD bytes the ROM keeps at
+  `0x4e88-0x4e8a` with a checksum at `0x3304`, and the ID `"PAC-MAN M2 PORT "` at
+  `0x3308`: once Pac-Man has saved a score, STF put back on the board rebuilds clean
+  backup RAM, and Pac-Man ignores STF's header. (Checked in MAME: a record at the old
+  place, the last 16 bytes, left STF's data alone and stayed there; one at `0x3300` made
+  STF restore its defaults, rankings included. A record at `0x3ff0` from the first version
+  is moved to `0x3300` at boot and the old 16 bytes cleared, so a board that saved a score
+  with it makes STF rebuild too, without a new high score. If both places hold a record,
+  the higher score goes to `0x3300`, which is left alone when it already has it.)
   It is written whenever the high score changes while the game runs (`0x4e00` = 1 attract,
   2 ready, 3 playing), never during the power-on self-test (ROM `0x3000`-`0x33ff`), whose
   RAM test writes patterns over everything. It is restored once, at the attract's first

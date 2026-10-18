@@ -174,9 +174,16 @@ static void pac_sound_update(void) {
 /* ---- the high score, kept in the Model 2's backup SRAM --------------------------------
  * Pac-Man has no NVRAM: the ROM clears work RAM at power-on, so the high score dies with the
  * power. The Model 2B has 16 KB of battery-backed SRAM at 0x01d00000 (MAME "backup1", kept
- * as sfight.nv in -nvram_directory); its last 16 bytes hold a record { "PACH", score } with
- * the score as the ROM keeps it at 0x4e88-0x4e8a (3 BCD bytes, low first) and a checksum in
- * the top byte. STF's own records (rankings, bookkeeping) are at the start of this SRAM.
+ * as sfight.nv in -nvram_directory). STF keeps its settings, rankings and bookkeeping in
+ * 0x3000-0x3fff and checks only its header: a word at 0x3300 and "SONICTHEFIGHTER" (in
+ * swapped words) at 0x3308; with either broken it initializes the whole SRAM at boot, and
+ * otherwise it keeps all of it, other bytes and all. So the record goes over that header:
+ * 0x3300 "PACH", 0x3304 the score as the ROM keeps it at 0x4e88-0x4e8a (3 BCD bytes, low
+ * first) with a checksum in the top byte, 0x3308 the ID "PAC-MAN M2 PORT ". Once Pac-Man
+ * has saved a score, a reinstalled STF finds no header of its own and starts from clean
+ * defaults; Pac-Man in turn ignores STF's header. A record from the first version, at
+ * 0x3ff0 where STF never looks, is moved there at boot, so that STF rebuilds too (the
+ * higher one wins when both hold a record).
  * Saved whenever the high score changes while the game runs (0x4e00 = 1 attract, 2 ready,
  * 3 playing; never from the power-on self-test, ROM 0x3000-0x33ff, which scribbles over RAM).
  * Restored once, at the attract's first frame (0x4e00 becomes 1 with the high score cleared):
@@ -186,16 +193,40 @@ static void pac_sound_update(void) {
  * leaves all this out (tools/lockstep clears its nvram directory instead). */
 #ifndef PAC_NO_HISCORE
 #define PAC_NV_MAGIC 0x48434150u       /* "PACH" */
-static volatile u32 *const pac_nv = (volatile u32 *)(0x01d00000u + 0x3ff0u);
+static volatile u32 *const pac_nv = (volatile u32 *)(0x01d00000u + 0x3300u);
+static volatile u32 *const pac_nv_old = (volatile u32 *)(0x01d00000u + 0x3ff0u);
+static const char pac_nv_id[16] = "PAC-MAN M2 PORT ";
 static u32 pac_hi_saved;               /* the record's score; 0 = no record */
 static int pac_hi_pending;             /* a record waits for the attract to restore it into */
 
 static u32 pac_hi_sum(u32 s) { return (0x5au - s - (s >> 8) - (s >> 16)) & 0xffu; }
 
+/* the score of a { "PACH", score|sum } record, 0 if there is none */
+static u32 pac_hi_read(volatile u32 *r) {
+    u32 v = r[1], s = v & 0xffffffu;
+    return (r[0] == PAC_NV_MAGIC && (v >> 24) == pac_hi_sum(s)) ? s : 0;
+}
+
+/* the record over STF's header; the old one goes */
+static void pac_hi_write(u32 s) {
+    volatile u8 *id = (volatile u8 *)&pac_nv[2];
+    int k;
+    for (k = 0; k < 16; k++) id[k] = (u8)pac_nv_id[k];
+    pac_nv[1] = s | pac_hi_sum(s) << 24;
+    pac_nv[0] = PAC_NV_MAGIC;
+}
+
 static void pac_hiscore_init(void) {
-    u32 v = pac_nv[1], s = v & 0xffffffu;
-    pac_hi_saved = 0; pac_hi_pending = 0;
-    if (pac_nv[0] == PAC_NV_MAGIC && (v >> 24) == pac_hi_sum(s) && s) { pac_hi_saved = s; pac_hi_pending = 1; }
+    volatile const u8 *id = (volatile const u8 *)&pac_nv[2];
+    u32 s = pac_hi_read(pac_nv);
+    int k;
+    u32 o = pac_hi_read(pac_nv_old);
+    for (k = 0; k < 16; k++) if (id[k] != (u8)pac_nv_id[k]) s = 0;
+    if (o) {                           /* BCD, top digit highest: compares as a number */
+        if (o > s) pac_hi_write(s = o);
+        for (k = 0; k < 4; k++) pac_nv_old[k] = 0;
+    }
+    pac_hi_saved = s; pac_hi_pending = s != 0;
 }
 
 /* after each Pac-Man frame */
@@ -214,8 +245,7 @@ static void pac_hiscore_update(void) {
         return;
     }
     if (s && s != pac_hi_saved && state >= 1 && state <= 3) {
-        pac_nv[1] = s | pac_hi_sum(s) << 24;
-        pac_nv[0] = PAC_NV_MAGIC;
+        pac_hi_write(s);
         pac_hi_saved = s;
     }
 }

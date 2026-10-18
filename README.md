@@ -94,6 +94,9 @@ a credit. Pac-Man is silent until a coin goes in, as on the real machine. No coc
 The high score survives a power cycle: the port keeps it in the Model 2's battery-backed
 SRAM (MAME: `sfight.nv` in its `-nvram_directory`), which the Pac-Man board never had; the
 panel shows `HI SAVED` when a boot found one. `-DPAC_NO_HISCORE` builds without it.
+The record takes the place of Sonic the Fighters' own header in that SRAM, so once a score
+is saved, STF put back on the board no longer finds its header and starts from clean
+defaults (as after a test-menu INITIALIZE).
 
 m2emulator: copy the three `roms/pacman/` files into its `roms\sfight` folder and run
 `EMULATOR.EXE sfight`. It is silent there (`NO
