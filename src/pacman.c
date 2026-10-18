@@ -182,7 +182,8 @@ static void pac_sound_update(void) {
  * first) with a checksum in the top byte, 0x3308 the ID "PAC-MAN M2 PORT ". Once Pac-Man
  * has saved a score, a reinstalled STF finds no header of its own and starts from clean
  * defaults; Pac-Man in turn ignores STF's header. A record from the first version, at
- * 0x3ff0 where STF never looks, is moved there at boot, so that STF rebuilds too.
+ * 0x3ff0 where STF never looks, is moved there at boot, so that STF rebuilds too (the
+ * higher one wins when both hold a record).
  * Saved whenever the high score changes while the game runs (0x4e00 = 1 attract, 2 ready,
  * 3 playing; never from the power-on self-test, ROM 0x3000-0x33ff, which scribbles over RAM).
  * Restored once, at the attract's first frame (0x4e00 becomes 1 with the high score cleared):
@@ -213,15 +214,18 @@ static void pac_hi_write(u32 s) {
     for (k = 0; k < 16; k++) id[k] = (u8)pac_nv_id[k];
     pac_nv[1] = s | pac_hi_sum(s) << 24;
     pac_nv[0] = PAC_NV_MAGIC;
-    for (k = 0; k < 4; k++) pac_nv_old[k] = 0;
 }
 
 static void pac_hiscore_init(void) {
     volatile const u8 *id = (volatile const u8 *)&pac_nv[2];
     u32 s = pac_hi_read(pac_nv);
     int k;
+    u32 o = pac_hi_read(pac_nv_old);
     for (k = 0; k < 16; k++) if (id[k] != (u8)pac_nv_id[k]) s = 0;
-    if (!s && (s = pac_hi_read(pac_nv_old)) != 0) pac_hi_write(s);
+    if (o) {                           /* BCD, top digit highest: compares as a number */
+        if (o > s) pac_hi_write(s = o);
+        for (k = 0; k < 4; k++) pac_nv_old[k] = 0;
+    }
     pac_hi_saved = s; pac_hi_pending = s != 0;
 }
 
