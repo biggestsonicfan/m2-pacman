@@ -120,7 +120,8 @@ COIN1/2, START1/2, SERVICE = credit.
   backup RAM, and Pac-Man ignores STF's header. (Checked in MAME: a record at the old
   place, the last 16 bytes, left STF's data alone and stayed there; one at `0x3300` made
   STF restore its defaults, rankings included. A record at `0x3ff0` from the first version
-  is still read, and moves to `0x3300` with the next new high score.)
+  is moved to `0x3300` at boot and the old 16 bytes cleared, so a board that saved a score
+  with it makes STF rebuild too, without a new high score.)
   It is written whenever the high score changes while the game runs (`0x4e00` = 1 attract,
   2 ready, 3 playing), never during the power-on self-test (ROM `0x3000`-`0x33ff`), whose
   RAM test writes patterns over everything. It is restored once, at the attract's first
