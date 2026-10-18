@@ -14,7 +14,7 @@
  * src/puckman.c is the same program on the Namco set (src/puckman_roms.h).
  *
  * Controls (Model 2 -> Pac-Man): P1 stick, P2 stick, COIN1/COIN2 = coins, START1/2,
- * SERVICE = credit. No cocktail flip.
+ * SERVICE = credit. No cocktail flip. The high score is kept in the board's backup SRAM.
  *
  * Sound needs snd/scsp_passthru.bin as the sound board's 68000 program (tools/m2_load.lua
  * loads it over a stock set); without it the game runs silent ("NO SOUND" on the panel).
@@ -171,6 +171,59 @@ static void pac_sound_update(void) {
     m2_scsp_pump();
 }
 
+/* ---- the high score, kept in the Model 2's backup SRAM --------------------------------
+ * Pac-Man has no NVRAM: the ROM clears work RAM at power-on, so the high score dies with the
+ * power. The Model 2B has 16 KB of battery-backed SRAM at 0x01d00000 (MAME "backup1", kept
+ * as sfight.nv in -nvram_directory); its last 16 bytes hold a record { "PACH", score } with
+ * the score as the ROM keeps it at 0x4e88-0x4e8a (3 BCD bytes, low first) and a checksum in
+ * the top byte. STF's own records (rankings, bookkeeping) are at the start of this SRAM.
+ * Saved whenever the high score changes while the game runs (0x4e00 = 1 attract, 2 ready,
+ * 3 playing; never from the power-on self-test, ROM 0x3000-0x33ff, which scribbles over RAM).
+ * Restored once, at the attract's first frame (0x4e00 becomes 1 with the high score cleared):
+ * the three bytes go into RAM, and the digits into the top row's cells 0x43ed-0x43f2 the way
+ * the ROM prints a score (6 digits, leading zeros blank, "00" at least), because the ROM
+ * only draws the high score when a player's score passes it (0x2a8c). -DPAC_NO_HISCORE
+ * leaves all this out (tools/lockstep clears its nvram directory instead). */
+#ifndef PAC_NO_HISCORE
+#define PAC_NV_MAGIC 0x48434150u       /* "PACH" */
+static volatile u32 *const pac_nv = (volatile u32 *)(0x01d00000u + 0x3ff0u);
+static u32 pac_hi_saved;               /* the record's score; 0 = no record */
+static int pac_hi_pending;             /* a record waits for the attract to restore it into */
+
+static u32 pac_hi_sum(u32 s) { return (0x5au - s - (s >> 8) - (s >> 16)) & 0xffu; }
+
+static void pac_hiscore_init(void) {
+    u32 v = pac_nv[1], s = v & 0xffffffu;
+    pac_hi_saved = 0; pac_hi_pending = 0;
+    if (pac_nv[0] == PAC_NV_MAGIC && (v >> 24) == pac_hi_sum(s) && s) { pac_hi_saved = s; pac_hi_pending = 1; }
+}
+
+/* after each Pac-Man frame */
+static void pac_hiscore_update(void) {
+    u32 s = (u32)pac_ram[0xe88] | (u32)pac_ram[0xe89] << 8 | (u32)pac_ram[0xe8a] << 16;
+    u8 state = pac_ram[0xe00];
+    int k;
+    if (z80.pc >= 0x3000) return;      /* the self-test */
+    if (pac_hi_pending) {
+        if (state != 1 || s) return;
+        s = pac_hi_saved;
+        pac_ram[0xe88] = (u8)s; pac_ram[0xe89] = (u8)(s >> 8); pac_ram[0xe8a] = (u8)(s >> 16);
+        for (k = 0; k < 6; k++)        /* through pac_wr: the cells get redrawn */
+            pac_wr((u16)(0x43ed + k), (u8)((k >= 2 && !(s >> (4 * k))) ? 0x40 : (s >> (4 * k)) & 15));
+        pac_hi_pending = 0;
+        return;
+    }
+    if (s && s != pac_hi_saved && state >= 1 && state <= 3) {
+        pac_nv[1] = s | pac_hi_sum(s) << 24;
+        pac_nv[0] = PAC_NV_MAGIC;
+        pac_hi_saved = s;
+    }
+}
+#else
+#define pac_hiscore_init()   ((void)0)
+#define pac_hiscore_update() ((void)0)
+#endif
+
 #ifdef PAC_IDLE_SINR
 /* Idle cheaply under MAME: its i960 core emulates each instruction at about the same host
  * cost, but charges `sinr` 406 cycles (MAME cpu/i960/i960.cpp) while computing it with one
@@ -290,6 +343,10 @@ int main(void) {
     pac_panel(112, "SPEED");
     pac_sound_init();
     pac_panel(152, pac_snd_ok ? "SCSP SOUND" : "NO SOUND");
+    pac_hiscore_init();
+#ifndef PAC_NO_HISCORE
+    if (pac_hi_pending) pac_panel(184, "HI SAVED");
+#endif
 
     last = t0 = frameVBL;
     for (;;) {
@@ -316,6 +373,7 @@ int main(void) {
             pac_frame(render && k == n - 1);
 #endif
             pac_sound_update();
+            pac_hiscore_update();
             frames++;
         }
         if (render) pac_blit();

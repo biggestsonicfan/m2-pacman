@@ -14,6 +14,7 @@ export LS_TOOLS=$here LS_FRAMES=${LS_FRAMES:-3000} LS_OUT=${LS_OUT:-/tmp/lockste
 mkdir -p "$LS_OUT"
 i960-elf-nm "$GAME/game.elf" | grep -E " _(z80|pac_(frames|ram|spr_xy|in0|in1|fb|irq_mask|vector|latch|snd|snd_on|irq_regs|irq_count))$" > "$LS_OUT/port.syms"
 common="-video none -sound none -nothrottle -skip_gameinfo -cfg_directory $LS_OUT/cfg -nvram_directory $LS_OUT/nvram"
+rm -rf "$LS_OUT/nvram"   # a high score the port saved to backup SRAM last time would be restored; MAME's pacman has none
 SDL_VIDEODRIVER=dummy "$MAME_PACMAN" pacman -rompath "$ROMS_PACMAN" $common -wavwrite "$LS_OUT/ref.wav" -autoboot_script "$here/ref.lua" > "$LS_OUT/ref.log" 2>&1
 if [ -n "$EPROMS" ]; then
   mkdir -p "$LS_OUT/roms/sfight"

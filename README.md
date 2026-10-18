@@ -91,6 +91,10 @@ stock one; the game then runs silent).
 Controls (Model 2 -> Pac-Man): P1 stick, P2 stick, COIN 1/2 = coins, START 1/2, SERVICE =
 a credit. Pac-Man is silent until a coin goes in, as on the real machine. No cocktail flip.
 
+The high score survives a power cycle: the port keeps it in the Model 2's battery-backed
+SRAM (MAME: `sfight.nv` in its `-nvram_directory`), which the Pac-Man board never had; the
+panel shows `HI SAVED` when a boot found one. `-DPAC_NO_HISCORE` builds without it.
+
 m2emulator: copy the three `roms/pacman/` files into its `roms\sfight` folder and run
 `EMULATOR.EXE sfight`. It is silent there (`NO
 SOUND`); see [docs/m2emulator.md](docs/m2emulator.md).
@@ -110,6 +114,9 @@ SOUND`); see [docs/m2emulator.md](docs/m2emulator.md).
   real board.
 - **Sound:** the i960 plays the Namco WSG on the SCSP, through a small relay program
   on the sound board; see [docs/sound.md](docs/sound.md).
+- **High score:** saved to the board's backup SRAM whenever it changes, and put back into
+  the game's RAM and onto the screen when the attract mode starts; see
+  [docs/port.md](docs/port.md).
 
 ## Status
 
