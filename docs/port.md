@@ -107,6 +107,22 @@ COIN1/2, START1/2, SERVICE = credit.
   stray pixel for a frame now and then).
 - **Tests:** `tools/z80test/z80test.c` runs zexdoc (67/67 pass) against the core on the
   host, and `tools/pachost.c` runs the whole board on the host and writes a PPM.
+- **High score:** Pac-Man's board has no NVRAM; its ROM clears work RAM at power-on and the
+  high score goes with it. The Model 2B has 16 KB of battery-backed SRAM at `0x01d00000`
+  (MAME `backup1`, saved as `sfight.nv` in `-nvram_directory`), so `src/pacman.c` keeps the
+  score there: the last 16 bytes hold `"PACH"`, the three BCD bytes the ROM keeps at
+  `0x4e88-0x4e8a`, and a checksum (STF's own records are at the start of that RAM).
+  It is written whenever the high score changes while the game runs (`0x4e00` = 1 attract,
+  2 ready, 3 playing), never during the power-on self-test (ROM `0x3000`-`0x33ff`), whose
+  RAM test writes patterns over everything. It is restored once, at the attract's first
+  frame, when `0x4e00` turns 1 with the high score cleared: the bytes go into RAM, and the
+  six digits into the top row's cells `0x43ed-0x43f2` the way the ROM prints a score
+  (leading zeros blank, two digits at least), because the ROM itself only draws the high
+  score when a player's score passes it (`0x2a8c`): on a fresh board the "HIGH SCORE"
+  line stays empty until then. Checked on the host (`pac_frame` with the restore, a game,
+  game over: the digits stay) and in MAME. The panel shows `HI SAVED` when a boot found a
+  record; `-DPAC_NO_HISCORE` leaves it all out. `tools/lockstep/run.sh` deletes its
+  nvram directory before each run, since MAME's own Pac-Man restores nothing.
 - **In the browser:** `src/pacman_web.c` is Pac-Man without the SHARC boot. A booted SHARC
   keeps MAME emulating its firmware's loop every frame, and Pac-Man gives it no work, so
   leaving it out makes MAME itself ~2.7x faster (native MAME: 60% -> 160% of real time).
