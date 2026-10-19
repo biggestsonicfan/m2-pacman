@@ -30,8 +30,13 @@ vectors:
 
 _start:
         move.w  #0x2700, %sr            | interrupts off while setting up
+        move.b  #0x1F, 0x400001         | sound board control: bit 4 on, LEDs (bits 0-3) off.
+                                        | STF's program keeps bit 4 set while it runs and
+                                        | clears it only in its error-blink loop: the
+                                        | board's audio output. MAME: sample banking only.
         lea     0x100000, %a5           | SCSP registers
-        move.w  #0x000F, 0x400(%a5)     | MVOL = 15, 16-bit DAC, 512 KB RAM mode
+        move.w  #0x030F, 0x400(%a5)     | MEM4MB (512 KB of 4 Mbit DRAM), DAC18B, MVOL = 15:
+                                        | STF writes 3 to 0x400, then 15 to 0x401
         clr.w   0x41E(%a5)              | SCIEB: no SCSP interrupt sources yet
         clr.w   0x42A(%a5)              | MCIEB: none to the main CPU
         move.w  #0x07FF, 0x422(%a5)     | SCIRE: clear anything pending

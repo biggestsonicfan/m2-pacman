@@ -97,21 +97,54 @@ static void pac_read_inputs(void) {
 }
 
 /* A tile-palette write goes through the colour-translation table: each 5-bit channel c
- * reads colorxlat row c, pen 0x40 (MAME sega/model2.cpp palette_w). m2_init's STF table
- * holds clamp(row * pen) there, which saturates any channel >= 4/31 to full, fine for
- * pure colours but it turns Pac-Man's blue maze white. Pac-Man draws no polygons, so
- * make that one column a straight 0..255 ramp. Must run BEFORE the palette writes
- * (MAME converts a colour when it is written). */
+ * reads colorxlat row c. MAME reads pen 0x40 (sega/model2.cpp palette_w); STF fills pens
+ * 0x40-0x7F of rows 0-31 with one value per row (m2-sdk m2__fill_scr_colorxlat: its
+ * screen-brightness ramp, 22..224), so the board reads one of those, picked by a
+ * brightness we don't know. Make pens 0x30-0xFF of rows 0-31 a straight 0..255 ramp:
+ * STF's ramp starts at 22 and its polygon table saturates at 4/31, both of which wash
+ * Pac-Man's blue maze out. Pens 0-0x2F are left to the polygon table (Pac-Man draws no
+ * polygons). Must run BEFORE the palette writes (MAME converts a colour when written). */
 static void pac_linear_tilepal(void) {
     volatile u16 *R = (volatile u16 *)0x01810000u;
     volatile u16 *G = (volatile u16 *)0x01814000u;
     volatile u16 *B = (volatile u16 *)0x01818000u;
-    u32 c;
+    u32 c, e;
     for (c = 0; c < 32u; c++) {
         u16 v = (u16)((c * 255u + 15u) / 31u);
-        R[c * 0x100u + 0x40u] = v; G[c * 0x100u + 0x40u] = v; B[c * 0x100u + 0x40u] = v;
+        for (e = 0x30u; e < 0x100u; e++) {
+            R[c * 0x100u + e] = v; G[c * 0x100u + e] = v; B[c * 0x100u + e] = v;
+        }
     }
 }
+
+#ifdef PAC_RAM2
+/* Leave for the geoserial manager when the host sends "PACX" over the RS-422 link
+ * (tools/ram2_upload.py --exit): set the kernel's break-in request (m2-sdk m2_fault.h
+ * M2_BREAK @0x5F0020, +4), and its vblank ISR aborts us at the next vblank. RAM stays as
+ * it was, so geoserial can PEEK the game's state. (The ISR's own button check is IN0
+ * bit 2, TEST, not SERVICE.) Silicon only: MAME's 315-5649 needs a strobe to deliver a
+ * byte; there, poke the request through the bridge. */
+static u8 pac_exit_seen;
+static void pac_host_poll(void) {
+    static const char key[4] = { 'P', 'A', 'C', 'X' };
+    int i;
+    for (i = 0; i < 8; i++) {
+        u8 f = M2_IO.flag, b;
+        if (f & 0x04u) b = M2_IO.rxd1;
+        else if (f & 0x08u) b = M2_IO.rxd2;
+        else return;
+        pac_exit_seen = b == (u8)key[pac_exit_seen] ? (u8)(pac_exit_seen + 1u)
+                      : b == (u8)key[0] ? 1u : 0u;
+        if (pac_exit_seen == 4u) {
+            ((volatile u32 *)0x005F0020u)[1] = 1u;
+            pac_exit_seen = 0;
+        }
+    }
+}
+#define PAC_HOST_POLL() pac_host_poll()
+#else
+#define PAC_HOST_POLL() ((void)0)
+#endif
 
 /* ---- sound: the Namco WSG on the SCSP -------------------------------------------------
  * With snd/scsp_passthru.s on the sound board (tools/m2_load.lua loads it), the i960 plays
@@ -510,12 +543,14 @@ int main(void) {
 #ifndef PAC_BENCH                      /* -DPAC_BENCH: run flat out, SPEED shows the headroom */
         while (frameVBL == last) {     /* one vblank's worth per vblank; feed the UART */
             m2_scsp_pump();
+            PAC_HOST_POLL();
 #ifdef PAC_IDLE_SINR
             pac_idle();
 #endif
         }
 #endif
         PAC_DG(0x17, frames);
+        PAC_HOST_POLL();               /* also when every vblank overruns (no wait above) */
         PAC_PF(5);
         last = frameVBL;
         if (last - t0 >= 60) {         /* speed = emulated frames vs real Pac-Man time */

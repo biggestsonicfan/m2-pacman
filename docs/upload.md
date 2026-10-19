@@ -92,7 +92,7 @@ between bytes. The script:
    launches it. pacboot checks the image's header and sum, zeroes `.bss` (0x541000),
    flushes the instruction cache and calls Pac-Man's `main`.
 
-Pac-Man then owns the board and no longer answers geoserial. If the board still answers
+Pac-Man then owns the board and no longer answers geoserial (only `PACX`, below). If the board still answers
 three seconds after the launch, pacboot refused the image, and the script prints why
 (the word it leaves at 0x540020).
 
@@ -101,9 +101,15 @@ three seconds after the launch, pacboot refused the image, and the script prints
 
 While Pac-Man runs:
 
-- **SERVICE returns to the geoserial manager**, not a credit as in the EPROM build: the
-  kernel's vblank ISR watches that button while an app runs. Pac-Man's RAM stays as it
-  was, so geoserial can then PEEK it (0x541000 up for the game's state). Use COIN for credits.
+- **TEST returns to the geoserial manager**: the kernel's vblank ISR watches IN0 bit 2
+  while an app runs (m2-sdk `i_handle.s`). That bit is TEST; SERVICE (bit 3) stays
+  Pac-Man's service credit. Pac-Man's RAM stays as it was, so geoserial can then PEEK it
+  (0x541000 up for the game's state).
+- **So does the host**, without anyone at the board:
+  `/usr/bin/python3 tools/ram2_upload.py /dev/ttyUSB0 --exit` sends `PACX`; Pac-Man sees
+  it on the RS-422 link (`pac_host_poll`) and sets the kernel's break-in request
+  (`M2_BREAK`, 0x5F0024), and the next vblank goes back to the manager, RAM kept. MAME's
+  315-5649 needs a strobe to deliver a byte, so there poke 0x5F0024 through the bridge.
 - `NO SOUND` on the panel unless Pac-Man's sound EPROM (`roms/pacman/epr-19021.31`) is
   in place of STF's; the kernel doesn't use the sound board, so it can stay in.
 - The high score is saved in the backup SRAM as usual.

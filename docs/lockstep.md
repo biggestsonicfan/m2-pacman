@@ -59,6 +59,12 @@ What the remaining differences are:
   SCSP play the same waveforms (a different chip, resampling and volume curve). The
   11 ms is the trip over the serial line to the sound board (~2 ms per register write).
 
+What this does not check: the pictures compared are the port's own 8-bit framebuffer
+(`pac_fb`, Pac-Man palette indices), not the colours a monitor shows. Those go on through
+the Model 2's tile palette, colour-translation table and gamma, which this MAME models
+from one guess (it reads colorxlat pen 0x40) and a real board does its own way; the same
+holds for the sound board past the SCSP's registers. Both need a look at the board.
+
 ## The upload build (`PAC_RAM2`)
 
 The image uploaded over geoserial ([upload.md](upload.md)) runs the same game code from

@@ -17,7 +17,7 @@ sound logic is i960 C. So no knowledge of the original audio driver is needed.
 
 ## How it was made (no compiler)
 
-The program is **hand-written 68000 assembly**, 132 lines:
+The program is **hand-written 68000 assembly**, 137 lines:
 `snd/scsp_passthru.s`. It is built with the GNU assembler and linker for m68k
 (Ubuntu package `binutils-m68k-linux-gnu`; binutils only, no gcc):
 
@@ -27,7 +27,7 @@ m68k-linux-gnu-ld -Ttext=0x600000 --oformat binary -o snd/scsp_passthru.bin scsp
 python3 tools/snd2rom.py snd/scsp_passthru.bin roms/      # -> roms/epr-19021.31
 ```
 
-- The result, `snd/scsp_passthru.bin` (304 bytes), is committed, so an ordinary build never
+- The result, `snd/scsp_passthru.bin` (312 bytes), is committed, so an ordinary build never
   needs the m68k tools; the CMake build has a `snd` target that re-runs the first two lines
   when they are installed. Any m68k binutils works (for example an `m68k-elf` build on
   Windows).
@@ -39,7 +39,8 @@ python3 tools/snd2rom.py snd/scsp_passthru.bin roms/      # -> roms/epr-19021.31
 
 At reset:
 
-1. Sets the SCSP up: master volume 15, 16-bit DAC, 512 KB RAM mode; no interrupt
+1. Sets the sound board's control latch (`0x400001` = `0x1F`, as STF does) and the
+   SCSP: master volume 15, 18-bit DAC, 4 Mbit RAM; no interrupt
    sources yet; all 32 voices keyed off and silent.
 2. Writes its exception vectors into sound RAM: every autovector points at a bare `RTE`,
    level 3 at the MIDI handler.
@@ -119,8 +120,20 @@ places where MAME could be wrong:
   that. How the real board boots its 68000 has not been checked against hardware.
 - **Waking:** the program sleeps in `STOP` and needs the SCSP's MIDI-input interrupt, at
   the level `SCILV0/1` set, to wake it.
-- The SCSP register values it writes (`MVOL` at `0x400`, the interrupt registers at
-  `0x41E`-`0x42A`, the slot layout) are MAME's.
+- The SCSP register values it writes (the interrupt registers at `0x41E`-`0x42A`, the
+  slot layout) are MAME's.
+
+The first board run (2026-10-19) answered the ping (`SCSP SOUND`) but stayed silent with
+a coin in. Sonic the Fighters' own sound program (`epr-19021.31`, reset at `0x601200`)
+does two things at boot that MAME doesn't need, and this program now does both:
+
+- It writes the sound board's control latch, a byte at `0x400001`: `0x1F` while it runs
+  (bits 0-3 are LEDs, active-low; bit 4 set). It clears bit 4 only in its error-blink
+  loop, so bit 4 is most likely the audio output's mute. MAME uses this latch only for
+  sample-ROM banking (bit 5) and plays sound either way.
+- It writes `3` to `0x400` (`MEM4MB`: 512 KB of 4 Mbit DRAM; `DAC18B`: the 18-bit DAC
+  format), then `15` to `0x401` (`MVOL`). The old value, `0x000F`, set 1 Mbit DRAM and a
+  16-bit DAC. MAME ignores `MEM4MB`, and gives `DAC18B` the same loudness.
 
 If any of that is wrong on a board, the i960's ping gets no answer: the game still runs,
 silently, with `NO SOUND` on the panel. The sound EPROM cannot stop the game.
