@@ -32,6 +32,16 @@ set(M2_STARTUP_ASM
     ${M2_SDK}/src/i_table.s
     ${M2_SDK}/src/i_handle.s)
 
+# -DPAC_RAM2=ON: an image to upload over geoserial (tools/ram2_upload.py) instead of the
+# EPROM pair. The code runs in main RAM, in the kernel's upload store (0x580000, 320 KB),
+# the working memory (.bss) is RAM2 (0x200000); the kernel keeps the boot and the vblank
+# ISR, so no startup asm here. The recompiled Z80 code (0xC6140 bytes in all) and the
+# SHARC firmware don't fit, so it's the interpreter and the tile plane only.
+option(PAC_RAM2 "Build a geoserial-uploadable image, .bss in RAM2 (lib/ram2.ld), not the EPROMs" OFF)
+if(PAC_RAM2)
+    set(M2_STARTUP_ASM "")
+endif()
+
 # Bare-metal ELF: game + SDK startup, NO libc/crt0. src/ first: the generated ROM and
 # recompiled-code headers live there; the SDK's src/ has m2*.h and the cpres*.h firmware.
 add_executable(game.elf ${M2_STARTUP_ASM} src/${M2_GAME}.c)
@@ -43,10 +53,16 @@ set(PAC_DEFS "" CACHE STRING "Extra -D for the game (e.g. PAC_NO_PANEL)")
 if(PAC_DEFS)
     target_compile_definitions(game.elf PRIVATE ${PAC_DEFS})
 endif()
-set_target_properties(game.elf PROPERTIES SUFFIX "")
+if(PAC_RAM2)
+    target_compile_definitions(game.elf PRIVATE PAC_RAM2 PAC_NO_RECOMP PAC_NO_SHARC)
+    set(PAC_LD "${CMAKE_SOURCE_DIR}/lib/ram2.ld")
+else()
+    set(PAC_LD "${M2_SDK}/lib/testlinkrom_elf.ld")
+endif()
+set_target_properties(game.elf PROPERTIES SUFFIX "" LINK_DEPENDS "${PAC_LD}")
 target_link_options(game.elf PRIVATE
     -nostdlib
-    "-T${M2_SDK}/lib/testlinkrom_elf.ld"
+    "-T${PAC_LD}"
     "-Wl,-Map=game.map")
 
 # Soft-float (no i960 hardware FP), the SDK's default; -DM2_SOFTFLOAT=OFF for MAME only.
@@ -72,6 +88,28 @@ endif()
 # complete set, and the flat image tools/m2_load.lua boots on a stock sfight romset.
 # Always-run, so a deleted roms/ is regenerated even when game.elf is unchanged.
 set(ROM_DIR "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}")
+if(PAC_RAM2)
+# roms/<game>_ram2/: the stamped image (<game>.p2r) and pacboot.gsx, the geoserial app that
+# checks it, zeroes its .bss and starts it (tools/ram2/pacboot.c, linked at the kernel's app
+# run base by tools/ram2/pacboot.ld).
+set(ROM_DIR "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}_ram2")
+add_executable(pacboot.elf tools/ram2/pacboot.c)
+target_compile_options(pacboot.elf PRIVATE -O2 -msoft-float -fno-builtin
+                       -fno-tree-loop-distribute-patterns)
+set_target_properties(pacboot.elf PROPERTIES SUFFIX ""
+                      LINK_DEPENDS "${CMAKE_SOURCE_DIR}/tools/ram2/pacboot.ld")
+target_link_options(pacboot.elf PRIVATE -nostdlib
+    "-T${CMAKE_SOURCE_DIR}/tools/ram2/pacboot.ld" "-Wl,-Map=pacboot.map")
+add_custom_target(rom ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${ROM_DIR}"
+    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:game.elf> game.bin
+    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:pacboot.elf> pacboot.bin
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/ram2_stamp.py"
+            game.bin pacboot.bin "${ROM_DIR}/${M2_GAME}.p2r" "${ROM_DIR}/pacboot.gsx"
+    DEPENDS game.elf pacboot.elf
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    VERBATIM)
+else()
 add_custom_target(rom ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory "${ROM_DIR}"
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:game.elf> game.bin
@@ -85,6 +123,7 @@ add_custom_target(rom ALL
     DEPENDS game.elf
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     VERBATIM)
+endif()
 
 # make -C build show-asm   (disassemble for real i960 mnemonics)
 add_custom_target(show-asm
