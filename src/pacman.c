@@ -48,7 +48,9 @@
 
 #ifndef PAC_ROMS                       /* src/puckman.c picks the other set */
 #define PAC_ROMS   "pacman_roms.h"
+#ifndef PAC_RC_HDR                     /* -DPAC_RC_HDR: another recompiled header (PAC_RAM2_RC) */
 #define PAC_RC_HDR "pacman_recomp.h"
+#endif
 #define PAC_NAME   "PAC-MAN"
 #endif
 #if __has_include(PAC_ROMS)
@@ -378,6 +380,39 @@ static void pac_dg_ram2(void) {
 #define PAC_DG(step, frames) ((void)0)
 #endif
 
+/* -DPAC_PROF: where the time goes, on the board. Board timer 3 (0x00F0000C) counts down at
+ * 25 MHz from the value written (MAME sega/model2.cpp timers_r/w; its IRQ stays off: the
+ * kernel enables only vblank). Each PAC_PF(k) adds the ticks since the last one to bucket k
+ * and restarts the timer; every 60 vblanks the panel shows each bucket's average per vblank
+ * in thousands of ticks (one Model 2 vblank = 435K): I inputs, Z the Z80 (pac_frame),
+ * S sound, H high score, B the tile copy, W waiting for vblank, O the rest of the loop. */
+#ifdef PAC_PROF
+#define PAC_TIMER (*(volatile u32 *)0x00F0000Cu)
+static u32 pac_pf_t0, pac_pf[7];
+static void pac_pf_mark(int k) {
+    u32 t = PAC_TIMER;
+    pac_pf[k] += (pac_pf_t0 - t) & 0xFFFFFu;
+    PAC_TIMER = 0xFFFFFu;
+    pac_pf_t0 = PAC_TIMER;
+}
+static void pac_pf_show(u32 vblanks, u8 ink) {
+    static const char tag[7] = { 'I', 'Z', 'S', 'H', 'B', 'W', 'O' };
+    char s[8];
+    int k;
+    for (k = 0; k < 7; k++) {
+        s[0] = tag[k]; s[1] = ' ';
+        pac_num(s + 2, (pac_pf[k] / vblanks + 500u) / 1000u, 4);
+        s[6] = 'K'; s[7] = 0;
+        tfb_fillrect(8, 200 + 16 * k, 7 * 8, 8, 0);
+        tfb_text(8, 200 + 16 * k, s, ink, -1);
+        pac_pf[k] = 0;
+    }
+}
+#define PAC_PF(k) pac_pf_mark(k)
+#else
+#define PAC_PF(k) ((void)0)
+#endif
+
 int main(void) {
     int i, ink = 1, best = -1, late = 0, skipped = 0;
     u32 last, t0, frames = 0, tick = 0;
@@ -439,8 +474,10 @@ int main(void) {
         for (n = 0; tick >= M2_HZ; n++) tick -= M2_HZ;
         for (k = 0; k < n; k++) {
             PAC_DG(0x10, frames);
+            PAC_PF(6);
             pac_read_inputs();
             PAC_DG(0x11, frames);
+            PAC_PF(0);
 #if defined(PAC_GEO_SPRITES)
             pac_frame(render && k == n - 1);
             m2_frame_begin();          /* the sprites, as polygons */
@@ -454,14 +491,19 @@ int main(void) {
             pac_frame(render && k == n - 1);
 #endif
             PAC_DG(0x12, frames);
+            PAC_PF(1);
             pac_sound_update();
             PAC_DG(0x13, frames);
+            PAC_PF(2);
             pac_hiscore_update();
+            PAC_PF(3);
             frames++;
         }
         PAC_DG(0x14, frames);
+        PAC_PF(6);
         if (render) pac_blit();
         PAC_DG(0x15, frames);
+        PAC_PF(4);
         skipped = render ? 0 : skipped + 1;
         late = frameVBL != last;
         PAC_DG(0x16, frames);
@@ -474,12 +516,16 @@ int main(void) {
         }
 #endif
         PAC_DG(0x17, frames);
+        PAC_PF(5);
         last = frameVBL;
         if (last - t0 >= 60) {         /* speed = emulated frames vs real Pac-Man time */
             pac_num(buf, frames * (100000u * (M2_HZ / 8u) / (PAC_HZ / 8u)) / ((last - t0) * 1000u), 3);
             buf[3] = '%'; buf[4] = 0;
             pac_panel_clear(128);
             pac_panel(128, buf);
+#ifdef PAC_PROF
+            pac_pf_show(last - t0, (u8)ink);
+#endif
             frames = 0; t0 = last;
         }
     }
