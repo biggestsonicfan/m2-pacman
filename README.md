@@ -98,6 +98,10 @@ The record takes the place of Sonic the Fighters' own header in that SRAM, so on
 is saved, STF put back on the board no longer finds its header and starts from clean
 defaults (as after a test-menu INITIALIZE).
 
+Real board without burning the game: burn only m2-x11's geoserial kernel and upload
+Pac-Man over RS-422 (code in main RAM, working memory in RAM2); see
+[docs/upload.md](docs/upload.md).
+
 m2emulator: copy the three `roms/pacman/` files into its `roms\sfight` folder and run
 `EMULATOR.EXE sfight`. It is silent there (`NO
 SOUND`); see [docs/m2emulator.md](docs/m2emulator.md).
@@ -125,6 +129,9 @@ SOUND`); see [docs/m2emulator.md](docs/m2emulator.md).
 
 - Byte-for-byte in lockstep with MAME's own `pacman` driver over 6000 frames, down to
   the Z80's R register; see [docs/lockstep.md](docs/lockstep.md).
-- Runs in MAME (native and web), and in m2emulator without sound (see [docs/m2emulator.md](docs/m2emulator.md)). **Not yet tried on real hardware.**
+- Runs in MAME (native and web), and in m2emulator without sound (see [docs/m2emulator.md](docs/m2emulator.md)). On a real Model 2B the
+  first burned pair showed one garbage tile over the whole screen, most likely because
+  the program EPROMs' upper halves (font, SHARC firmware) don't read back as burned; see
+  [docs/upload.md](docs/upload.md).
   The sound EPROM in particular rests on MAME's model of the sound board (see
   [docs/sound.md](docs/sound.md#on-real-hardware)).
