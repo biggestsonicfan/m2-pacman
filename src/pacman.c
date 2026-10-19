@@ -339,6 +339,45 @@ static void pac_num(char *s, u32 v, int w) {
 #define pac_panel_clear(y)  tfb_fillrect(8, y, 5 * 8, 8, 0)
 #endif
 
+/* -DPAC_DIAG: the panel shows how far the game got, for a board with no other window into
+ * it: "S" the last step reached (1-8 the boot, 10-17 the main loop), then frameVBL, frames
+ * run and the Z80's PC, redrawn at every step. A hang leaves the step it hung in. */
+#ifdef PAC_DIAG
+static u8 pac_dg_ink = 1;
+static void pac_dg(int y, char tag, u32 v) {
+    char s[11];
+    int i;
+    s[0] = tag; s[1] = ' ';
+    for (i = 0; i < 8; i++) s[2 + i] = "0123456789ABCDEF"[(v >> (28 - 4 * i)) & 15];
+    s[10] = 0;
+    tfb_fillrect(8, y, 10 * 8, 8, 0);
+    tfb_text(8, y, s, pac_dg_ink, -1);
+}
+static void pac_dg_step(u32 step, u32 frames) {
+    pac_dg(200, 'S', step);
+    pac_dg(216, 'V', frameVBL);
+    pac_dg(232, 'F', frames);
+    pac_dg(248, 'P', z80.pc);
+}
+#define PAC_DG(step, frames) pac_dg_step(step, frames)
+/* whether RAM2 keeps what is written: a word every 32 KB of 0x200000-0x23FFFF, then read
+ * them back. "M" 01234567 if all 256 KB are RAM (MAME); the 2B tested read garbage. "B":
+ * bytes 11 22 33 44 stored one at a time at 0x200100, read back as a word (44332211) */
+static void pac_dg_ram2(void) {
+    volatile u32 *w = (volatile u32 *)0x00200000;
+    volatile u8 *b = (volatile u8 *)0x00200100;
+    u32 m = 0;
+    int k;
+    for (k = 0; k < 8; k++) w[k * 0x2000] = 0xA5A5A500u | (u32)k;
+    for (k = 0; k < 8; k++) m = (m << 4) | (w[k * 0x2000] & 15u);
+    b[0] = 0x11; b[1] = 0x22; b[2] = 0x33; b[3] = 0x44;
+    pac_dg(168, 'M', m);
+    pac_dg(184, 'B', *(volatile u32 *)b);
+}
+#else
+#define PAC_DG(step, frames) ((void)0)
+#endif
+
 int main(void) {
     int i, ink = 1, best = -1, late = 0, skipped = 0;
     u32 last, t0, frames = 0, tick = 0;
@@ -351,13 +390,20 @@ int main(void) {
 #endif
     pac_linear_tilepal();              /* after m2_silicon_boot: m2_color_init rebuilds colorxlat */
     tfb_init();
+    PAC_DG(3, 0);
     pac_reset();
+    PAC_DG(4, 0);
     for (i = 0; i < 16; i++) {         /* Pac-Man palette -> tile palette (every FB bank) */
         u8 r, g, b;
         pac_palette_rgb(i, &r, &g, &b);
         tfb_setcolor((u8)i, M2_RGB(r >> 3, g >> 3, b >> 3));
         if (r + g + b > best) { best = r + g + b; ink = i; }
     }
+#ifdef PAC_DIAG
+    pac_dg_ink = (u8)ink;
+    pac_dg_ram2();
+#endif
+    PAC_DG(5, 0);
 #ifdef PAC_GEO_SPRITES
     pac_geo_sprites_init();
 #endif
@@ -371,9 +417,12 @@ int main(void) {
     pac_panel(168, "GEO SPRITES");
 #endif
     pac_panel(112, "SPEED");
+    PAC_DG(6, 0);
     pac_sound_init();
     pac_panel(152, pac_snd_ok ? "SCSP SOUND" : "NO SOUND");
+    PAC_DG(7, 0);
     pac_hiscore_init();
+    PAC_DG(8, 0);
 #ifndef PAC_NO_HISCORE
     if (pac_hi_pending) pac_panel(184, "HI SAVED");
 #endif
@@ -389,7 +438,9 @@ int main(void) {
         tick += PAC_HZ;
         for (n = 0; tick >= M2_HZ; n++) tick -= M2_HZ;
         for (k = 0; k < n; k++) {
+            PAC_DG(0x10, frames);
             pac_read_inputs();
+            PAC_DG(0x11, frames);
 #if defined(PAC_GEO_SPRITES)
             pac_frame(render && k == n - 1);
             m2_frame_begin();          /* the sprites, as polygons */
@@ -402,13 +453,18 @@ int main(void) {
 #endif
             pac_frame(render && k == n - 1);
 #endif
+            PAC_DG(0x12, frames);
             pac_sound_update();
+            PAC_DG(0x13, frames);
             pac_hiscore_update();
             frames++;
         }
+        PAC_DG(0x14, frames);
         if (render) pac_blit();
+        PAC_DG(0x15, frames);
         skipped = render ? 0 : skipped + 1;
         late = frameVBL != last;
+        PAC_DG(0x16, frames);
 #ifndef PAC_BENCH                      /* -DPAC_BENCH: run flat out, SPEED shows the headroom */
         while (frameVBL == last) {     /* one vblank's worth per vblank; feed the UART */
             m2_scsp_pump();
@@ -417,6 +473,7 @@ int main(void) {
 #endif
         }
 #endif
+        PAC_DG(0x17, frames);
         last = frameVBL;
         if (last - t0 >= 60) {         /* speed = emulated frames vs real Pac-Man time */
             pac_num(buf, frames * (100000u * (M2_HZ / 8u) / (PAC_HZ / 8u)) / ((last - t0) * 1000u), 3);

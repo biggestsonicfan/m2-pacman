@@ -4,7 +4,7 @@ Pac-Man image and its pacboot app, check both headers, write them out.
     python3 tools/ram2_stamp.py game.bin pacboot.bin <out.p2r> <out.gsx>
 
 game.bin    objcopy of the lib/ram2.ld build: header 'P2R1' {entry, size, bss, bss_size,
-            sum@20}, run at 0x580000 (the upload store), .bss in RAM2
+            sum@20}, run at 0x580000 (the upload store), .bss in the slots after it
 pacboot.bin objcopy of tools/ram2/pacboot.ld: a GSX1 geoserial app {sum@28}
 
 The pair-sum is m2-x11's (tools/gsx_stamp.py gsx_pair_sum, the kernel's gs_romsum), which
@@ -13,7 +13,6 @@ the kernel's PROG_CRC also computes over each upload slot.
 import struct, sys
 
 STORE_BASE = 0x580000                     # geoserial's upload store, GS_STORE_BASE
-RAM2_BASE, RAM2_SIZE = 0x200000, 0x40000
 P2R_MAGIC, GSX_MAGIC = 0x31523250, 0x47535831
 SLOT = 0x10000                            # geoserial upload slot (GS_SLOT_SIZE)
 SLOTS_FOR_IMAGE = 5                       # 6 slots; the last holds pacboot
@@ -42,8 +41,8 @@ def main(game, boot, out_img, out_gsx):
         fail(f"{game}: header size {size:#x} != file size {len(img):#x}")
     if size > SLOTS_FOR_IMAGE * SLOT:
         fail(f"{game}: {size:#x} bytes needs more than {SLOTS_FOR_IMAGE} upload slots")
-    if not (RAM2_BASE <= bss and bss + bss_size <= RAM2_BASE + RAM2_SIZE):
-        fail(f"{game}: .bss {bss:#x}+{bss_size:#x} outside RAM2")
+    if not (STORE_BASE + size <= bss and bss + bss_size <= STORE_BASE + SLOTS_FOR_IMAGE * SLOT):
+        fail(f"{game}: .bss {bss:#x}+{bss_size:#x} not in the store after the image")
     if not (STORE_BASE <= entry < STORE_BASE + size):
         fail(f"{game}: entry {entry:#x} outside the image")
     struct.pack_into("<I", img, 20, pair_sum(img, 20))

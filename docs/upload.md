@@ -14,10 +14,14 @@ RS-422 link:
 |---|---|
 | program EPROMs | the geoserial kernel: boot, interrupt table, vblank ISR (`frameVBL`), serial manager |
 | main RAM 0x580000 | Pac-Man's code, rodata and `.data`, 0x2E2B0 bytes: the kernel's upload slots 0-2, where it is linked to run |
-| RAM2 0x200000 | Pac-Man's working memory (`.bss`, 0x19E80 bytes) |
+| main RAM 0x5B0000 | Pac-Man's working memory (`.bss`, 0x19E80 bytes): slots 3-4, left unallocated |
 | main RAM 0x560000 | the stack (geoserial's app stack) |
 
 The kernel's own RAM (0x500000-0x53FFFF, 0x5E0000 up) is left alone.
+
+Not RAM2 (0x200000), which MAME maps as 256 KB of RAM: on the board (2026-10-19) words
+poked there over geoserial read back 0 or garbage. The first upload kept `.bss` there
+and hung in its first Z80 frame.
 
 ## Build
 
@@ -56,13 +60,20 @@ comes up. Then, with the RS-422 adapter on COM5:
 python tools/ram2_upload.py COM5
 ```
 
+From the dev container, with the adapter forwarded to WSL (usbipd) and `ftdi_sio` loaded
+there, it is `/dev/ttyUSB0`; use `/usr/bin/python3`, which has pyserial:
+
+```sh
+/usr/bin/python3 tools/ram2_upload.py /dev/ttyUSB0
+```
+
 It takes about 11 minutes: the board's receiver needs 3 ms between bytes. The script:
 
 1. PINGs the kernel and deletes whatever is in its upload store (RAM; nothing is kept);
 2. writes `pacman.p2r` into slots 0, 1, 2 (64 KB each, end to end from 0x580000) and
    checks each slot's sum with PROG_CRC;
 3. uploads `pacboot.gsx` (a normal GSX1 geoserial app, `tools/ram2/pacboot.c`) and
-   launches it. pacboot checks the image's header and sum, zeroes `.bss` in RAM2,
+   launches it. pacboot checks the image's header and sum, zeroes `.bss`,
    flushes the instruction cache and calls Pac-Man's `main`.
 
 Pac-Man then owns the board and no longer answers geoserial. If the board still answers
@@ -76,7 +87,7 @@ While Pac-Man runs:
 
 - **SERVICE returns to the geoserial manager**, not a credit as in the EPROM build: the
   kernel's vblank ISR watches that button while an app runs. Pac-Man's RAM stays as it
-  was, so geoserial can then PEEK it (RAM2 for the game's state). Use COIN for credits.
+  was, so geoserial can then PEEK it (0x5B0000 up for the game's state). Use COIN for credits.
 - `NO SOUND` on the panel unless Pac-Man's sound EPROM (`roms/pacman/epr-19021.31`) is
   in place of STF's; the kernel doesn't use the sound board, so it can stay in.
 - The high score is saved in the backup SRAM as usual.

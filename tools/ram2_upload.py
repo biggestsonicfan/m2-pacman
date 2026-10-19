@@ -1,5 +1,5 @@
 """ram2_upload.py: run Pac-Man on a Model 2B with the geoserial kernel burned, without
-burning Pac-Man: the code in main RAM, its working memory in RAM2
+burning Pac-Man: the code and its working memory in main RAM
 (build: cmake -B build-ram2 -DPAC_RAM2=ON; make -C build-ram2).
 
     python tools/ram2_upload.py COM5                 real board (pyserial), 3 ms/byte
@@ -10,7 +10,7 @@ It uses m2-x11's host driver (tools/geo_serial.py; --m2x11 if it isn't at ../m2-
   2. Store roms/pacman_ram2/pacman.p2r in slots 0, 1, 2..., 64 KB each, which lie end to
      end from 0x580000, where it is linked to run; check each slot's pair-sum (PROG_CRC).
   3. Upload pacboot.gsx (a normal GSX1 app) and launch it. It checks the image, zeroes
-     .bss in RAM2 (0x200000) and starts Pac-Man, which doesn't answer geoserial.
+     .bss (0x5B0000, after the image) and starts Pac-Man, which doesn't answer geoserial.
      If the board still answers, pacboot refused the image: its reason is at 0x540020.
 
 The first write of each image slot is 16 bytes long: the kernel checks a GSX1 header in

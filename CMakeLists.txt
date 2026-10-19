@@ -34,10 +34,11 @@ set(M2_STARTUP_ASM
 
 # -DPAC_RAM2=ON: an image to upload over geoserial (tools/ram2_upload.py) instead of the
 # EPROM pair. The code runs in main RAM, in the kernel's upload store (0x580000, 320 KB),
-# the working memory (.bss) is RAM2 (0x200000); the kernel keeps the boot and the vblank
+# the working memory (.bss) in the store's free slots after it (not RAM2, which the real
+# board doesn't keep; the option's name is older); the kernel keeps the boot and the vblank
 # ISR, so no startup asm here. The recompiled Z80 code (0xC6140 bytes in all) and the
 # SHARC firmware don't fit, so it's the interpreter and the tile plane only.
-option(PAC_RAM2 "Build a geoserial-uploadable image, .bss in RAM2 (lib/ram2.ld), not the EPROMs" OFF)
+option(PAC_RAM2 "Build a geoserial-uploadable image (lib/ram2.ld), not the EPROMs" OFF)
 if(PAC_RAM2)
     set(M2_STARTUP_ASM "")
 endif()
