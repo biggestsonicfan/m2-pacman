@@ -42,6 +42,8 @@ At reset:
 1. Sets the sound board's control latch (`0x400001` = `0x1F`, as STF does), then spins
    ~30 ms, as STF does, before touching the SCSP.
 2. Sets the SCSP: 18-bit DAC, 4 Mbit RAM, master volume 0 for now; no interrupt sources.
+   Like STF, it checks that sound RAM `0x40000` no longer mirrors `0`, and writes the
+   setting again if it does (16 tries at most).
 3. Writes every register of all 32 slots: zero, except release rate max and total level
    0xFF (silent), and keys them all off.
 4. Zeroes the effect DSP's program, coefficients and addresses (`0x700`-`0xBFF`) and puts
@@ -52,13 +54,24 @@ At reset:
    (`SCILV0/1` bit 3), clears it and enables it (`SCIEB` bit 3).
 7. Sleeps: `STOP #0x2000`, forever.
 
+The control latch's LED bits (0-3, lit when clear) show how far the boot got, the way
+STF steps them: `0x1E` after the RAM setting, `0x1C` after the slots, `0x18` when it
+listens. Each ping (`0xF0`) then flips bit 3, so a board whose LEDs stop at `0x1F` or
+`0x1E` hung in setup, and one that blinks as the i960 pings is answering.
+
 Steps 1, 3, 4, 5 and the FIFO flush are for a real board, whose SCSP registers, DSP
 program RAM and sound RAM come up holding whatever they hold. MAME clears them, so it
 needs none of that (see "Checked against STF's program" below).
 
 Each byte from the i960 lands in the SCSP's MIDI input FIFO and raises the interrupt. The
-handler reads bytes (`0x405`) while `SCIPD` bit 3 says one is pending, feeds them to a
-packet parser, and returns to `STOP`. A sleeping 68000 costs an emulator nothing between
+handler reads one byte (`0x405`), feeds it to a packet parser, and returns to `STOP`; the
+interrupt stays raised while the FIFO holds more, so it comes straight back for the next.
+That is how STF's handler works (`0x6017A8`). An earlier version kept reading while
+`SCIPD` bit 3 said a byte was pending: if a board's flag lags the read, that is one read
+of an empty FIFO, and the byte it returns (`0xFF`, or anything with bit 7 set) cut the
+packet in progress short. The ping, a single byte, survived that; every register write
+might not, which fits the first board run (ping answered, no sound). The handler now
+also ignores `0xFF` (never sent; STF treats it as a MIDI reset). A sleeping 68000 costs an emulator nothing between
 bytes; an earlier polling version cost MAME ~16% of its host time.
 
 ### The packets
@@ -175,6 +188,17 @@ the new program's output was sample-identical to a clean restart.
 
 If any of that is wrong on a board, the i960's ping gets no answer: the game still runs,
 silently, with `NO SOUND` on the panel. The sound EPROM cannot stop the game.
+
+MAME, the one-byte handler (2026-10-20): the same 1695 SCSP slot writes, in the same
+order, as the previous program over 30 s with a coin and a start (a write tap on the
+68000's `0x100000`-`0x1003FF`). Only their timing moves, a few ms at most.
+
+### Board runs
+
+- 2026-10-19, EPROM build, the first program: `SCSP SOUND`, silent with a coin in.
+- 2026-10-20, upload build: `NO SOUND`. Pinging from the host through the geoserial
+  manager (poking `0xF0` into the UART at `0x9C0000` and polling its status) got no
+  answer either: the UART sends (status `0x85`), the sound board doesn't answer.
 
 A first hardware test: burn the three EPROMs, boot, and look at the panel. `SCSP SOUND`
 means the 68000 booted, took the MIDI interrupt and answered the ping; then insert a
