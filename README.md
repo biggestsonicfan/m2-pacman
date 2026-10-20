@@ -68,7 +68,7 @@ make -C build -j2                                    # -> roms/pacman/ (M2_GAME=
 ```
 
 `src/puckman.c` builds the Namco Puck Man set the same way (`puckman.zip`, `roms/puckman/`).
-The sound EPROM needs no 68000 toolchain: its 312-byte program is committed
+The sound EPROM needs no 68000 toolchain: its 384-byte program is committed
 (`snd/scsp_passthru.bin`) and the build pads and word-swaps it (`tools/snd2rom.py`).
 
 ## Running
