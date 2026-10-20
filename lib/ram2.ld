@@ -1,7 +1,7 @@
 /* GNU ld (i960-elf) script: Pac-Man as an image uploaded over geoserial (tools/ram2_upload.py)
  * instead of burned into the program EPROMs. The code runs in main RAM, where the kernel's
- * upload store keeps it; the game's working memory (.bss) follows it there, from the first
- * slot the image leaves free. Not RAM2 (0x200000), MAME's 256 KB: on a real Model 2B words
+ * upload store keeps it; the game's working memory (.bss) goes in the kernel's app run area,
+ * after pacboot (which runs there), so all five image slots are free for code. Not RAM2 (0x200000), MAME's 256 KB: on a real Model 2B words
  * written there read back 0 or garbage, and with .bss there the game hung in its first frame.
  *
  * The geoserial kernel in the EPROMs keeps its boot, interrupt table and vblank ISR (which
@@ -10,7 +10,8 @@
  *
  *   0x580000  header (32 bytes), code, rodata, .data: the store's slots 0, 1, 2...
  *             (64 KB each, end to end; at most 5, slot 5 holds pacboot)
- *   0x5B0000  .bss (0x19E80 bytes), in slots 3-4, which the upload leaves unallocated
+ *   0x541000  .bss (about 0x1A000 bytes), in the run area after pacboot (< 4 KB at 0x540000),
+ *             below the app stack
  *   0x560000  stack: the app stack geoserial gives pacboot (grows up to 0x580000)
  *
  * The kernel's own RAM (0x500000-0x53FFFF, 0x5E0000-0x5FFFFF) isn't touched.
@@ -21,6 +22,7 @@ ENTRY(_main)
 MEMORY
 {
     store (rwx) : ORIGIN = 0x00580000, LENGTH = 0x050000
+    run   (rw)  : ORIGIN = 0x00541000, LENGTH = 0x01F000
 }
 
 SECTIONS
@@ -54,7 +56,7 @@ SECTIONS
     _BUFF_ADD      = 0x00501004;
     _buffIndex     = 0x0050100C;
 
-    .bss (ALIGN(0x10000)) (NOLOAD) :
+    .bss (NOLOAD) :
     {
         _bss_start = .;
         *(.bss)
@@ -62,7 +64,7 @@ SECTIONS
         *(COMMON)
         . = ALIGN(16);
         _bss_end = .;
-    } > store
+    } > run
 
     /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame) }
 }

@@ -3,8 +3,8 @@
  * tools/ram2_upload.py stores the image in the kernel's upload slots 0, 1, 2..., which sit
  * end to end from GS_STORE_BASE (0x580000, 64 KB each), where it is linked to run; then it
  * uploads this app and launches it. pacboot checks the image's header and STF pair-sum,
- * zeroes its .bss (after the image, in the store's free slots), flushes the i960KB's instruction cache and calls the
- * entry. Pac-Man never returns. If the image is bad, pacboot leaves a code in the word at
+ * zeroes its .bss (0x541000, in the run area after this app), flushes the i960KB's
+ * instruction cache and calls the entry. Pac-Man never returns. If the image is bad, pacboot leaves a code in the word at
  * 0x540020 and returns to the manager, where the host can read it. */
 
 typedef unsigned int  u32;
@@ -12,6 +12,8 @@ typedef unsigned char u8;
 
 #define STORE_BASE 0x00580000u          /* m2-x11 src/gs/gs_memory.h GS_STORE_BASE */
 #define STORE_SIZE 0x00050000u          /* slots 0-4; slot 5 holds this app */
+#define BSS_BASE   0x00541000u          /* the image's .bss: the run area after this app */
+#define BSS_TOP    0x00560000u          /* GS_APP_STACK, this app's stack */
 #define P2R_MAGIC  0x31523250u          /* 'P2R1' */
 #define P2R_OFF_SUM 20u
 
@@ -47,7 +49,7 @@ int pacboot(void) {
 
     if (h[0] != P2R_MAGIC) { pb_status = PB_MAGIC; return 1; }
     if (size < 32u || size > STORE_SIZE || (size & 3u) ||
-        bss < STORE_BASE + size || bss_size > STORE_SIZE || bss + bss_size > STORE_BASE + STORE_SIZE ||
+        bss < BSS_BASE || bss_size > BSS_TOP - BSS_BASE || bss + bss_size > BSS_TOP ||
         h[1] < STORE_BASE || h[1] >= STORE_BASE + size) { pb_status = PB_SIZE; return 2; }
     if (pair_sum((const volatile u8 *)STORE_BASE, size, P2R_OFF_SUM) != h[5]) {
         pb_status = PB_SUM; return 3;

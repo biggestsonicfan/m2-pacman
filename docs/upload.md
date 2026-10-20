@@ -13,9 +13,10 @@ RS-422 link:
 | Where | What |
 |---|---|
 | program EPROMs | the geoserial kernel: boot, interrupt table, vblank ISR (`frameVBL`), serial manager |
-| main RAM 0x580000 | Pac-Man's code, rodata and `.data`, 0x2E2B0 bytes: the kernel's upload slots 0-2, where it is linked to run |
-| main RAM 0x5B0000 | Pac-Man's working memory (`.bss`, 0x19E80 bytes): slots 3-4, left unallocated |
-| main RAM 0x560000 | the stack (geoserial's app stack) |
+| main RAM 0x580000 | Pac-Man's code, rodata and `.data`, 0x4E670 bytes: the kernel's upload slots 0-4, where it is linked to run |
+| main RAM 0x540000 | pacboot (3 KB), which the kernel runs here, its app run area |
+| main RAM 0x541000 | Pac-Man's working memory (`.bss`, 0x19E80 bytes), in the run area after pacboot |
+| main RAM 0x560000 | the stack (geoserial's app stack, up to 0x580000) |
 
 The kernel's own RAM (0x500000-0x53FFFF, 0x5E0000 up) is left alone.
 
@@ -45,11 +46,25 @@ make -C build-ram2 -j2            # -> roms/pacman_ram2/pacman.p2r, pacboot.gsx
 ```
 
 `PAC_RAM2` links with `lib/ram2.ld`, with no startup code (the kernel's stays in
-charge). It also sets `PAC_NO_RECOMP` and `PAC_NO_SHARC`: the recompiled Z80 code
-(0xC6140 bytes in all) doesn't fit, so the game runs on the interpreter, and it doesn't
-upload the SHARC firmware a second time (the kernel booted the SHARC already; Pac-Man
-draws only the tile plane). In MAME the interpreter runs the attract mode at 101% speed,
-the same as the EPROM build without the recompiled code.
+charge). It sets `PAC_NO_SHARC`: it doesn't upload the SHARC firmware a second time (the
+kernel booted the SHARC already; Pac-Man draws only the tile plane).
+
+The whole recompiled Z80 code (`src/pacman_recomp.h`, 0xC6140 bytes compiled) doesn't fit
+in the store, so the upload build recompiles only the hottest part,
+`src/pacman_ram2_recomp.h`: the 1097 instruction addresses that take 98.5% of the Z80's
+cycles. Every other address runs in the interpreter. To make it again (after a change to
+the ROM or `z80recomp.py`):
+
+```sh
+cc -O2 -Isrc -o pactrace tools/pactrace.c && ./pactrace -c > cycles.txt
+python3 tools/ram2/hot.py cycles.txt 98.5 > hot.txt
+python3 tools/z80recomp.py src/pacman_roms.h hot.txt src/pacman_ram2_recomp.h
+```
+
+`-DPAC_RAM2_RC=none` builds the interpreter alone (0x2E2B0 bytes, a faster upload);
+`-DPAC_RAM2_RC=<header>` another set. With the interpreter alone the board ran the attract
+mode at 49-58% speed (2026-10-19); MAME, which doesn't model the board's memory wait
+states, shows 99-101% either way.
 
 ## Run
 
@@ -67,16 +82,17 @@ there, it is `/dev/ttyUSB0`; use `/usr/bin/python3`, which has pyserial:
 /usr/bin/python3 tools/ram2_upload.py /dev/ttyUSB0
 ```
 
-It takes about 11 minutes: the board's receiver needs 3 ms between bytes. The script:
+It takes about 17 minutes (the interpreter alone, 10): the board's receiver needs 3 ms
+between bytes. The script:
 
 1. PINGs the kernel and deletes whatever is in its upload store (RAM; nothing is kept);
-2. writes `pacman.p2r` into slots 0, 1, 2 (64 KB each, end to end from 0x580000) and
+2. writes `pacman.p2r` into slots 0, 1, 2... (64 KB each, end to end from 0x580000) and
    checks each slot's sum with PROG_CRC;
 3. uploads `pacboot.gsx` (a normal GSX1 geoserial app, `tools/ram2/pacboot.c`) and
-   launches it. pacboot checks the image's header and sum, zeroes `.bss`,
+   launches it. pacboot checks the image's header and sum, zeroes `.bss` (0x541000),
    flushes the instruction cache and calls Pac-Man's `main`.
 
-Pac-Man then owns the board and no longer answers geoserial. If the board still answers
+Pac-Man then owns the board and no longer answers geoserial (only `PACX`, below). If the board still answers
 three seconds after the launch, pacboot refused the image, and the script prints why
 (the word it leaves at 0x540020).
 
@@ -85,9 +101,15 @@ three seconds after the launch, pacboot refused the image, and the script prints
 
 While Pac-Man runs:
 
-- **SERVICE returns to the geoserial manager**, not a credit as in the EPROM build: the
-  kernel's vblank ISR watches that button while an app runs. Pac-Man's RAM stays as it
-  was, so geoserial can then PEEK it (0x5B0000 up for the game's state). Use COIN for credits.
+- **TEST returns to the geoserial manager**: the kernel's vblank ISR watches IN0 bit 2
+  while an app runs (m2-sdk `i_handle.s`). That bit is TEST; SERVICE (bit 3) stays
+  Pac-Man's service credit. Pac-Man's RAM stays as it was, so geoserial can then PEEK it
+  (0x541000 up for the game's state).
+- **So does the host**, without anyone at the board:
+  `/usr/bin/python3 tools/ram2_upload.py /dev/ttyUSB0 --exit` sends `PACX`; Pac-Man sees
+  it on the RS-422 link (`pac_host_poll`) and sets the kernel's break-in request
+  (`M2_BREAK`, 0x5F0024), and the next vblank goes back to the manager, RAM kept. MAME's
+  315-5649 needs a strobe to deliver a byte, so there poke 0x5F0024 through the bridge.
 - `NO SOUND` on the panel unless Pac-Man's sound EPROM (`roms/pacman/epr-19021.31`) is
   in place of STF's; the kernel doesn't use the sound board, so it can stay in.
 - The high score is saved in the backup SRAM as usual.
@@ -102,7 +124,7 @@ MAME_EXE_NAME=/path/to/mame MAME_CWD=$PWD M2_HLE_GEO_OFF=1 \
   python3 tools/ram2_upload.py --mame --rompath "/path/kernel;/path/to/stock/roms" --seconds 60
 ```
 
-The upload takes about 7 minutes there. `--seconds` lets the game run on, then reads
+The upload takes about 11 minutes there (7 for the interpreter alone). `--seconds` lets the game run on, then reads
 `frameVBL` and saves a snapshot in `./snap`.
 
 ## Checking the EPROMs

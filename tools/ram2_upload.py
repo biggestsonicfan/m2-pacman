@@ -10,7 +10,7 @@ It uses m2-x11's host driver (tools/geo_serial.py; --m2x11 if it isn't at ../m2-
   2. Store roms/pacman_ram2/pacman.p2r in slots 0, 1, 2..., 64 KB each, which lie end to
      end from 0x580000, where it is linked to run; check each slot's pair-sum (PROG_CRC).
   3. Upload pacboot.gsx (a normal GSX1 app) and launch it. It checks the image, zeroes
-     .bss (0x5B0000, after the image) and starts Pac-Man, which doesn't answer geoserial.
+     .bss (0x541000, in the run area after pacboot) and starts Pac-Man, which doesn't answer geoserial.
      If the board still answers, pacboot refused the image: its reason is at 0x540020.
 
 The first write of each image slot is 16 bytes long: the kernel checks a GSX1 header in
@@ -110,14 +110,29 @@ async def run(gs, g, image, boot, launch=True):
         print(f"the board came back to the manager: pacboot says "
               f"{REASONS.get(v, hex(v) if v is not None else 'nothing')}")
         return False
-    print("Pac-Man is running (geoserial no longer answers; "
-          "power-cycle, or press SERVICE, for the manager)")
+    print("Pac-Man is running (geoserial no longer answers; --exit, TEST or a "
+          "power-cycle brings the manager back)")
     return True
 
 
-async def main_serial(g, port, baud, pace, image, boot, launch):
+async def exit_game(gs, link):
+    """Send "PACX": Pac-Man (src/pacman.c pac_host_poll) asks the kernel's vblank ISR to
+    abort it, and the geoserial manager comes back with Pac-Man's RAM as it was."""
+    if await gs.ping():
+        print("the board already answers geoserial (the manager is up)")
+        return True
+    await link.send(b"PACX")
+    ok, attempts, _, _ = await gs.wait_ping(10)
+    print("back at the geoserial manager" if ok else
+          f"no PING reply after PACX ({attempts} tries): power-cycle, or press TEST")
+    return ok
+
+
+async def main_serial(g, port, baud, pace, image, boot, launch, exit_only=False):
     link = g.SerialLink(port, baud, send_pace=pace)
     try:
+        if exit_only:
+            return await exit_game(g.GeoSerial(link), link)
         return await run(g.GeoSerial(link), g, image, boot, launch)
     finally:
         link.close()
@@ -160,6 +175,8 @@ def main():
     ap.add_argument("--boot", default=os.path.join(ROOT, "roms", "pacman_ram2", "pacboot.gsx"))
     ap.add_argument("--m2x11", default=os.path.join(ROOT, "..", "m2-x11"))
     ap.add_argument("--no-launch", action="store_true", help="upload only")
+    ap.add_argument("--exit", action="store_true",
+                    help="return a running Pac-Man to the geoserial manager, keeping its RAM")
     ap.add_argument("--mame", action="store_true", help="test on MAME instead of a board")
     ap.add_argument("--rompath", default="", help="MAME: rompath (kernel pair first)")
     ap.add_argument("--seconds", type=float, default=0, help="MAME: run on, then read frameVBL")
@@ -169,6 +186,9 @@ def main():
     image = open(a.image, "rb").read()
     g = load_geo_serial(a.m2x11)
     est = (len(image) // CHUNK + 1) * (CHUNK + 9) * a.pace
+    if a.exit and not a.mame:
+        sys.exit(0 if asyncio.run(main_serial(g, a.port, a.baud, a.pace, image, a.boot,
+                                               False, exit_only=True)) else 1)
     if not a.mame:
         print(f"upload ~{est / 60:.0f} min at {a.pace * 1000:.0f} ms/byte")
         ok = asyncio.run(main_serial(g, a.port, a.baud, a.pace, image, a.boot, not a.no_launch))

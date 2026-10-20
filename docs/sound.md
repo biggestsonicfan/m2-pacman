@@ -17,7 +17,7 @@ sound logic is i960 C. So no knowledge of the original audio driver is needed.
 
 ## How it was made (no compiler)
 
-The program is **hand-written 68000 assembly**, 132 lines:
+The program is **hand-written 68000 assembly**, 169 lines:
 `snd/scsp_passthru.s`. It is built with the GNU assembler and linker for m68k
 (Ubuntu package `binutils-m68k-linux-gnu`; binutils only, no gcc):
 
@@ -27,7 +27,7 @@ m68k-linux-gnu-ld -Ttext=0x600000 --oformat binary -o snd/scsp_passthru.bin scsp
 python3 tools/snd2rom.py snd/scsp_passthru.bin roms/      # -> roms/epr-19021.31
 ```
 
-- The result, `snd/scsp_passthru.bin` (304 bytes), is committed, so an ordinary build never
+- The result, `snd/scsp_passthru.bin` (384 bytes), is committed, so an ordinary build never
   needs the m68k tools; the CMake build has a `snd` target that re-runs the first two lines
   when they are installed. Any m68k binutils works (for example an `m68k-elf` build on
   Windows).
@@ -39,13 +39,22 @@ python3 tools/snd2rom.py snd/scsp_passthru.bin roms/      # -> roms/epr-19021.31
 
 At reset:
 
-1. Sets the SCSP up: master volume 15, 16-bit DAC, 512 KB RAM mode; no interrupt
-   sources yet; all 32 voices keyed off and silent.
-2. Writes its exception vectors into sound RAM: every autovector points at a bare `RTE`,
-   level 3 at the MIDI handler.
-3. Routes the SCSP's MIDI-input interrupt to level 3 (`SCILV0/1` bit 3) and enables it
-   (`SCIEB` bit 3).
-4. Sleeps: `STOP #0x2000`, forever.
+1. Sets the sound board's control latch (`0x400001` = `0x1F`, as STF does), then spins
+   ~30 ms, as STF does, before touching the SCSP.
+2. Sets the SCSP: 18-bit DAC, 4 Mbit RAM, master volume 0 for now; no interrupt sources.
+3. Writes every register of all 32 slots: zero, except release rate max and total level
+   0xFF (silent), and keys them all off.
+4. Zeroes the effect DSP's program, coefficients and addresses (`0x700`-`0xBFF`) and puts
+   its ring buffer at `0x70000`-`0x73FFF`; then master volume 15.
+5. Writes all 64 exception vectors into sound RAM: the errors and traps restart the
+   program, the autovectors point at a bare `RTE`, level 3 at the MIDI handler.
+6. Empties the MIDI input FIFO (4 reads), routes the MIDI-input interrupt to level 3
+   (`SCILV0/1` bit 3), clears it and enables it (`SCIEB` bit 3).
+7. Sleeps: `STOP #0x2000`, forever.
+
+Steps 1, 3, 4, 5 and the FIFO flush are for a real board, whose SCSP registers, DSP
+program RAM and sound RAM come up holding whatever they hold. MAME clears them, so it
+needs none of that (see "Checked against STF's program" below).
 
 Each byte from the i960 lands in the SCSP's MIDI input FIFO and raises the interrupt. The
 handler reads bytes (`0x405`) while `SCIPD` bit 3 says one is pending, feeds them to a
@@ -119,8 +128,50 @@ places where MAME could be wrong:
   that. How the real board boots its 68000 has not been checked against hardware.
 - **Waking:** the program sleeps in `STOP` and needs the SCSP's MIDI-input interrupt, at
   the level `SCILV0/1` set, to wake it.
-- The SCSP register values it writes (`MVOL` at `0x400`, the interrupt registers at
-  `0x41E`-`0x42A`, the slot layout) are MAME's.
+- The SCSP register values it writes (the interrupt registers at `0x41E`-`0x42A`, the
+  slot layout) are MAME's.
+
+The first board run (2026-10-19) answered the ping (`SCSP SOUND`) but stayed silent with
+a coin in. Sonic the Fighters' own sound program (`epr-19021.31`, reset at `0x601200`)
+does two things at boot that MAME doesn't need, and this program now does both:
+
+- It writes the sound board's control latch, a byte at `0x400001`: `0x1F` while it runs
+  (bits 0-3 are LEDs, active-low; bit 4 set). It clears bit 4 only in its error-blink
+  loop, so bit 4 is most likely the audio output's mute. MAME uses this latch only for
+  sample-ROM banking (bit 5) and plays sound either way.
+- It writes `3` to `0x400` (`MEM4MB`: 512 KB of 4 Mbit DRAM; `DAC18B`: the 18-bit DAC
+  format), then `15` to `0x401` (`MVOL`). The old value, `0x000F`, set 1 Mbit DRAM and a
+  16-bit DAC. MAME ignores `MEM4MB`, and gives `DAC18B` the same loudness.
+
+### Checked against STF's program
+
+STF's own sound program (`epr-19021.31`, word-swapped, loaded at `0x600000`) was taken
+apart in Ghidra (its 68000 processor module, language `68000:BE:32:MC68020`, a superset
+of the 68000; Ghidra ships no plain-68000 variant and there is no maintained one to
+install) and compared with this program. What STF does that this program did not, and
+now does:
+
+| STF (address) | What it does | Why it matters on a board |
+|---|---|---|
+| `0x60122A` | spins ~30 ms before touching the SCSP | the board settles first |
+| `0x6013B6` | every slot: TL `0xFF`, RR `0x1F`, key off | slot registers power up unknown; this program wrote only 3 of each slot's 16, and the i960 never writes `0x0E` (modulation) or `0x12` (LFO) of its 3 |
+| `0x601390` | loads its own DSP program into `0x700`-`0xBFF`, ring buffer at `0x70000` (`0x402` = `0x138`) | a garbage DSP program writes its ring buffer, at sound RAM 0 when `RBP` is 0: over the vectors and the waveforms at `0x1000` |
+| `0x60133A` | copies a full 64-entry vector table into sound RAM | an error or trap through an unwritten vector jumps to garbage |
+| `0x601404` | reads the MIDI FIFO 4 times before enabling its interrupt | stale bytes |
+
+What STF does the same way, confirming this program's assumptions: `3` to `0x400`
+(`MEM4MB` + `DAC18B`; STF also checks that `0x40000` doesn't mirror `0`), `15` to `MVOL`
+last, MIDI input at interrupt level 3 (`SCILV0` and `SCILV1` bit 3), and a handler that
+reads `0x405` with a byte read and never clears `SCIPD` bit 3 through `SCIRE` (STF's reads
+one byte per interrupt and returns: the interrupt is held while the FIFO has bytes, as
+MAME models it). STF's handler also restarts its program on a `0xFF` byte (MIDI reset);
+the i960 never sends one.
+
+MAME test (`sfight`, 40 s, coin at 10 s, start at 11.7 s, `-wavwrite`): the new program's
+output is sample-identical to the old one's. With pseudo-random words written into
+every slot register, the DSP program RAM and sound RAM, and the 68000 restarted, the
+old program's coin sound came out at a fifth of its level and every later level was off;
+the new program's output was sample-identical to a clean restart.
 
 If any of that is wrong on a board, the i960's ping gets no answer: the game still runs,
 silently, with `NO SOUND` on the panel. The sound EPROM cannot stop the game.
