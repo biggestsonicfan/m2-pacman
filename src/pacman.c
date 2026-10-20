@@ -74,6 +74,10 @@
 #define PAC_COL0 17                    /* Pac-Man screen origin on the tile plane, in cells */
 #define PAC_ROW0 6
 
+#ifdef PAC_RAM2
+static u8 pac_raw_sys = 0xff, pac_raw_p1 = 0xff;   /* this frame's IN0 and IN1, for pac_board_watch */
+#endif
+
 /* Model 2 inputs -> Pac-Man IN0/IN1 (all active-low on both boards) */
 static void pac_read_inputs(void) {
     u8 sys, p1, p2, in0 = 0xff, in1 = 0xff;
@@ -94,6 +98,9 @@ static void pac_read_inputs(void) {
     if (!(sys & M2_IN0_START2)) in1 &= ~0x40;
     pac_in0 = in0;
     pac_in1 = in1;                     /* bit 4 test off, bit 7 = upright cabinet */
+#ifdef PAC_RAM2
+    pac_raw_sys = sys; pac_raw_p1 = p1;
+#endif
 }
 
 /* A tile-palette write goes through the colour-translation table: each 5-bit channel c
@@ -446,6 +453,52 @@ static void pac_pf_show(u32 vblanks, u8 ink) {
 #define PAC_PF(k) ((void)0)
 #endif
 
+#ifdef PAC_RAM2
+/* Once per Pac-Man frame, for a board we can't see into otherwise:
+ * - TEST returns to the geoserial manager, RAM kept. The kernel's vblank ISR looks for
+ *   TEST at IN0 bit 2 (bank 0), where MAME has it, and on the board (2026-10-19) that
+ *   never fired. STF's read_sw (m2-sdk m2_swio.h) reads TEST from bank 1 instead, bit 7
+ *   (SERVICE bit 6). Watch both; fire only on a press, held 1/4 s, after the bit was
+ *   seen released, so a bit that just reads 0 on some board can't throw us out.
+ * - The panel shows the raw inputs (IN0 bank 0, IN0 bank 1, IN1) as they change, and
+ *   every second the Z80's PC. */
+static u8 pac_test_armed, pac_test_held;
+static void pac_hex(char *s, u32 v, int n) {
+    int i;
+    for (i = 0; i < n; i++) s[i] = "0123456789ABCDEF"[(v >> (4 * (n - 1 - i))) & 15];
+}
+static void pac_board_watch(u8 ink, u32 frames) {
+    static u32 shown = 0xffffffffu;
+    char s[11];
+    u8 b1, test;
+    u32 now;
+    M2_IO.bank = 1;
+    b1 = M2_IO.in0;
+    M2_IO.bank = 0;
+    test = !(pac_raw_sys & M2_IN0_TEST) || !(b1 & 0x80u);
+    if (!test) { pac_test_armed = 1; pac_test_held = 0; }
+    else if (pac_test_armed && ++pac_test_held >= 15) {
+        ((volatile u32 *)0x005F0020u)[1] = 1u;      /* M2_BREAK->request: the ISR aborts us */
+        pac_test_armed = 0;
+    }
+    now = ((u32)pac_raw_sys << 16) | ((u32)b1 << 8) | pac_raw_p1;
+    if (now != shown) {
+        shown = now;
+        s[0] = 'I'; s[1] = ' '; pac_hex(s + 2, now, 6); s[8] = 0;
+        tfb_fillrect(8, 344, 10 * 8, 8, 0);
+        tfb_text(8, 344, s, ink, -1);
+    }
+    if (frames % 60u == 0u) {
+        s[0] = 'P'; s[1] = 'C'; s[2] = ' '; pac_hex(s + 3, z80.pc, 4); s[7] = 0;
+        tfb_fillrect(8, 360, 10 * 8, 8, 0);
+        tfb_text(8, 360, s, ink, -1);
+    }
+}
+#define PAC_BOARD_WATCH(ink, f) pac_board_watch((u8)(ink), f)
+#else
+#define PAC_BOARD_WATCH(ink, f) ((void)0)
+#endif
+
 int main(void) {
     int i, ink = 1, best = -1, late = 0, skipped = 0;
     u32 last, t0, frames = 0, tick = 0;
@@ -509,6 +562,7 @@ int main(void) {
             PAC_DG(0x10, frames);
             PAC_PF(6);
             pac_read_inputs();
+            PAC_BOARD_WATCH(ink, frames);
             PAC_DG(0x11, frames);
             PAC_PF(0);
 #if defined(PAC_GEO_SPRITES)
