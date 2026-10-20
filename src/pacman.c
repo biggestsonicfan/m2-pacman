@@ -125,10 +125,31 @@ static void pac_linear_tilepal(void) {
 }
 
 #ifdef PAC_RAM2
+/* Back to the geoserial manager: set the kernel's break-in request (m2-sdk m2_fault.h
+ * M2_BREAK @0x5F0020, +4), and its vblank ISR aborts us at the next vblank. First hand the
+ * screen back as the manager set it up: its recovery (m2-x11 gs_fault.h
+ * gs_recover_to_monitor) redraws its text, but doesn't reload the font that tfb_init
+ * turned into framebuffer cells, nor the colour ramp pac_linear_tilepal changed, so on the
+ * board (2026-10-20) TEST brought back a black screen with scraps of Pac-Man's panel where
+ * the manager's text should be. The ramp is rebuilt the way the kernel built it (m2_init,
+ * then m2_color_init's two fills). Never returns: we spin until the ISR takes us, so the
+ * abort can't land between m2_frame_begin and m2_frame_commit. */
+static void pac_exit(void) {
+    u16 sp = m2_tile(0, 0x20);
+    int k;
+    m2__build_colorxlat();
+#ifdef PAC_SHARC
+    m2__fill_colorxlat();
+    m2__fill_scr_colorxlat();
+#endif
+    m2_loadfont();
+    for (k = 0; k < 0x2000; k++) { M2_TILE_FG[k] = sp; M2_TILE_BG[k] = sp; }
+    ((volatile u32 *)0x005F0020u)[1] = 1u;
+    for (;;) { }
+}
+
 /* Leave for the geoserial manager when the host sends "PACX" over the RS-422 link
- * (tools/ram2_upload.py --exit): set the kernel's break-in request (m2-sdk m2_fault.h
- * M2_BREAK @0x5F0020, +4), and its vblank ISR aborts us at the next vblank. RAM stays as
- * it was, so geoserial can PEEK the game's state. (The ISR's own button check is IN0
+ * (tools/ram2_upload.py --exit): pac_exit. RAM stays as it was, so geoserial can PEEK the game's state. (The ISR's own button check is IN0
  * bit 2, TEST, not SERVICE.) Silicon only: MAME's 315-5649 needs a strobe to deliver a
  * byte; there, poke the request through the bridge. */
 static u8 pac_exit_seen;
@@ -142,10 +163,7 @@ static void pac_host_poll(void) {
         else return;
         pac_exit_seen = b == (u8)key[pac_exit_seen] ? (u8)(pac_exit_seen + 1u)
                       : b == (u8)key[0] ? 1u : 0u;
-        if (pac_exit_seen == 4u) {
-            ((volatile u32 *)0x005F0020u)[1] = 1u;
-            pac_exit_seen = 0;
-        }
+        if (pac_exit_seen == 4u) pac_exit();
     }
 }
 #define PAC_HOST_POLL() pac_host_poll()
@@ -514,10 +532,7 @@ static void pac_board_watch(u8 ink, u32 frames) {
     M2_IO.bank = 0;
     test = !(pac_raw_sys & M2_IN0_TEST) || !(b1 & 0x80u);
     if (!test) { pac_test_armed = 1; pac_test_held = 0; }
-    else if (pac_test_armed && ++pac_test_held >= 15) {
-        ((volatile u32 *)0x005F0020u)[1] = 1u;      /* M2_BREAK->request: the ISR aborts us */
-        pac_test_armed = 0;
-    }
+    else if (pac_test_armed && ++pac_test_held >= 15) pac_exit();
     now = ((u32)pac_raw_sys << 16) | ((u32)b1 << 8) | pac_raw_p1;
     if (now != shown) {
         shown = now;
