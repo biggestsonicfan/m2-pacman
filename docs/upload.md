@@ -127,6 +127,23 @@ MAME_EXE_NAME=/path/to/mame MAME_CWD=$PWD M2_HLE_GEO_OFF=1 \
 The upload takes about 11 minutes there (7 for the interpreter alone). `--seconds` lets the game run on, then reads
 `frameVBL` and saves a snapshot in `./snap`.
 
+## Comparing the board with the host
+
+Build with `-DPAC_DEFS=PAC_DUMP` and the board sends a record every frame over RS-422:
+the Z80's PC and SP, a check of the ROM image and the RAM page at 0x4D00. With idle inputs
+the game is deterministic, so the first frame where it parts from the host build is where
+the board goes wrong:
+
+```sh
+cc -O2 -Isrc -o pachost tools/pachost.c
+PACHOST_TRACE=/dev/shm/ht.bin ./pachost 30000 /dev/null
+python3 tools/pacdump.py /dev/ttyUSB0 --out dumps --seconds 420 --host /dev/shm/ht.bin --rom pac.rom
+```
+
+It costs about 3 ms a frame. It found the attract freeze: the board garbles unaligned word
+and halfword accesses (MAME doesn't), and GCC made them from byte pairs in the Z80 core.
+The build now uses `-mstrict-alignment`.
+
 ## Checking the EPROMs
 
 The garbage screen points at the EPROM burn, not the code. Two things to find out:

@@ -1,7 +1,11 @@
 /*
  * pachost.c — run src/pacman_hw.h on the host and write the screen as a PPM.
  *
- *   cc -O2 -Isrc -o pachost tools/pachost.c && ./pachost 300 out.ppm [in0hex]
+ *   cc -O2 -Isrc -o pachost tools/pachost.c && ./pachost 300 out.ppm [in0hex [ram.bin]]
+ *
+ * ram.bin: the 4 KB of RAM at 0x4000 after the last frame, to compare with a board's
+ * snapshot. PACHOST_TRACE=file: the 256 bytes at 0x4D00 before each frame, to compare
+ * with the board's per-frame records (tools/pacdump.py).
  *
  * Builds against src/pacman_roms.h when it exists (tools/pacrom.py), else the bundled
  * test program src/pactest_rom.h — the same choice src/pacman.c makes.
@@ -19,10 +23,11 @@ typedef unsigned char u8; typedef unsigned short u16; typedef unsigned int u32;
 int main(int argc, char **argv) {
     int frames = argc > 1 ? atoi(argv[1]) : 120, f, x, y;
     const char *out = argc > 2 ? argv[2] : "pac.ppm";
-    FILE *o;
+    FILE *o, *trace = getenv("PACHOST_TRACE") ? fopen(getenv("PACHOST_TRACE"), "wb") : 0;
     pac_reset();
     for (f = 0; f < frames; f++) {
         pac_in0 = (argc > 3 && f > frames / 2) ? (u8)strtol(argv[3], 0, 16) : 0xff;
+        if (trace) fwrite(pac_ram + 0xD00, 1, 0x100, trace);
         pac_frame(1);
         pac_copy_done();
     }
@@ -36,6 +41,12 @@ int main(int argc, char **argv) {
             fputc(r, o); fputc(g, o); fputc(b, o);
         }
     fclose(o);
+    if (argc > 4) {
+        if (!(o = fopen(argv[4], "wb"))) return 1;
+        fwrite(pac_ram, 1, sizeof pac_ram, o);
+        fclose(o);
+    }
+    if (trace) fclose(trace);
     printf("%s: %d frames, pc=%04x\n", out, frames, z80.pc);
     return 0;
 }

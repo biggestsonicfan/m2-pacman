@@ -463,6 +463,43 @@ static void pac_pf_show(u32 vblanks, u8 ink) {
  * - The panel shows the raw inputs (IN0 bank 0, IN0 bank 1, IN1) as they change, and
  *   every second the Z80's PC. */
 static u8 pac_test_armed, pac_test_held;
+
+/* Every frame, a record of the Z80 to the host (tools/pacdump.py), so the frame where the
+ * board parts from the host build shows: "PACF", the frame count, PC, SP, a 1 KB slice
+ * of the ROM image (frame & 15) and its 32-bit sum, the 8 ROM bytes at 0x340B (a speed
+ * pattern the board has been seen to copy as zeros), the 256 bytes of RAM at 0x4D00 (the
+ * game's state: speed patterns, timers, positions), then a 16-bit byte sum. Sent the way the kernel's rs422_putc sends (m2-x11 gs_serial.h): wait for
+ * each TX buffer to empty, no wait for the peer; the wire carries a 0x07 strobe before each.
+ * About 3 ms a frame, so only with -DPAC_DEFS=PAC_DUMP. */
+#ifdef PAC_DUMP
+#define PAC_DUMP_LEN (25u + 0x100u + 2u)
+static u32 pac_dump_frame;
+static void pac_tx(u8 b) {
+    u32 n;
+    for (n = 0; (M2_IO.flag & 0x02u) && n < 100000u; n++) { }
+    M2_IO.txd2 = b;
+    for (n = 0; (M2_IO.flag & 0x01u) && n < 100000u; n++) { }
+    M2_IO.txd1 = 0x07u;
+}
+static void pac_dump_step(void) {
+    u8 d[PAC_DUMP_LEN];
+    u32 i, sum = 0, f = pac_dump_frame++;
+    d[0] = 'P'; d[1] = 'A'; d[2] = 'C'; d[3] = 'F';
+    for (i = 0; i < 4; i++) d[4 + i] = (u8)(f >> (8 * i));
+    d[8] = (u8)z80.pc; d[9] = (u8)(z80.pc >> 8);
+    d[10] = (u8)z80.sp; d[11] = (u8)(z80.sp >> 8);
+    d[12] = (u8)(f & 15u);
+    for (i = 0; i < 0x400u; i++) sum += pac_rom[(f & 15u) * 0x400u + i];
+    for (i = 0; i < 4; i++) d[13 + i] = (u8)(sum >> (8 * i));
+    for (i = 0; i < 8; i++) d[17 + i] = pac_rom[0x340Bu + i];
+    for (i = 0; i < 0x100u; i++) d[25 + i] = pac_ram[0xD00u + i];
+    sum = 0;
+    for (i = 0; i < PAC_DUMP_LEN - 2u; i++) sum += d[i];
+    d[PAC_DUMP_LEN - 2u] = (u8)sum;
+    d[PAC_DUMP_LEN - 1u] = (u8)(sum >> 8);
+    for (i = 0; i < PAC_DUMP_LEN; i++) pac_tx(d[i]);
+}
+#endif
 static void pac_hex(char *s, u32 v, int n) {
     int i;
     for (i = 0; i < n; i++) s[i] = "0123456789ABCDEF"[(v >> (4 * (n - 1 - i))) & 15];
@@ -493,6 +530,9 @@ static void pac_board_watch(u8 ink, u32 frames) {
         tfb_fillrect(8, 360, 10 * 8, 8, 0);
         tfb_text(8, 360, s, ink, -1);
     }
+#ifdef PAC_DUMP
+    pac_dump_step();
+#endif
 }
 #define PAC_BOARD_WATCH(ink, f) pac_board_watch((u8)(ink), f)
 #else
