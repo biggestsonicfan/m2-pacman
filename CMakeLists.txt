@@ -47,7 +47,10 @@ endif()
 # recompiled-code headers live there; the SDK's src/ has m2*.h and the cpres*.h firmware.
 add_executable(game.elf ${M2_STARTUP_ASM} src/${M2_GAME}.c)
 target_include_directories(game.elf PRIVATE src "${M2_SDK}/src")
-target_compile_options(game.elf PRIVATE $<$<COMPILE_LANGUAGE:C>:-O2>)
+# -mstrict-alignment: the real board garbles a word or halfword access that is not aligned
+# (the KB splits it; the byte in the next word comes out wrong), MAME does not. GCC
+# merges byte pairs and folds const bytes into such accesses without it.
+target_compile_options(game.elf PRIVATE $<$<COMPILE_LANGUAGE:C>:-O2 -mstrict-alignment>)
 # a lone game .c: m2.h's boot stubs must be global (see the SDK's CMakeLists.txt)
 target_compile_definitions(game.elf PRIVATE $<$<COMPILE_LANGUAGE:C>:M2_API=>)
 set(PAC_DEFS "" CACHE STRING "Extra -D for the game (e.g. PAC_NO_PANEL)")
@@ -109,7 +112,7 @@ if(PAC_RAM2)
 # run base by tools/ram2/pacboot.ld).
 set(ROM_DIR "${CMAKE_SOURCE_DIR}/roms/${M2_GAME}_ram2")
 add_executable(pacboot.elf tools/ram2/pacboot.c)
-target_compile_options(pacboot.elf PRIVATE -O2 -msoft-float -fno-builtin
+target_compile_options(pacboot.elf PRIVATE -O2 -msoft-float -mstrict-alignment -fno-builtin
                        -fno-tree-loop-distribute-patterns)
 set_target_properties(pacboot.elf PROPERTIES SUFFIX ""
                       LINK_DEPENDS "${CMAKE_SOURCE_DIR}/tools/ram2/pacboot.ld")

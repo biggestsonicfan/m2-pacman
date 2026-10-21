@@ -101,14 +101,17 @@ three seconds after the launch, pacboot refused the image, and the script prints
 
 While Pac-Man runs:
 
-- **TEST returns to the geoserial manager**: the kernel's vblank ISR watches IN0 bit 2
-  while an app runs (m2-sdk `i_handle.s`). That bit is TEST; SERVICE (bit 3) stays
-  Pac-Man's service credit. Pac-Man's RAM stays as it was, so geoserial can then PEEK it
+- **Holding TEST (half a second) returns to the geoserial manager**: Pac-Man sees it
+  (`pac_board_watch`) and calls `pac_exit`, which puts back what the game overwrote (the
+  colour tables, the font, the tilemaps) and sets the kernel's break-in request, so the
+  manager's screen comes back readable. The kernel's own check (IN0 bank 0 bit 2, m2-sdk
+  `i_handle.s`) is where MAME has TEST, not the real board. SERVICE stays Pac-Man's
+  service credit. Pac-Man's RAM stays as it was, so geoserial can then PEEK it
   (0x541000 up for the game's state).
 - **So does the host**, without anyone at the board:
   `/usr/bin/python3 tools/ram2_upload.py /dev/ttyUSB0 --exit` sends `PACX`; Pac-Man sees
-  it on the RS-422 link (`pac_host_poll`) and sets the kernel's break-in request
-  (`M2_BREAK`, 0x5F0024), and the next vblank goes back to the manager, RAM kept. MAME's
+  it on the RS-422 link (`pac_host_poll`) and calls `pac_exit` too
+  (the request is `M2_BREAK` + 4, 0x5F0024), and the next vblank goes back to the manager, RAM kept. MAME's
   315-5649 needs a strobe to deliver a byte, so there poke 0x5F0024 through the bridge.
 - `NO SOUND` on the panel unless Pac-Man's sound EPROM (`roms/pacman/epr-19021.31`) is
   in place of STF's; the kernel doesn't use the sound board, so it can stay in.
@@ -126,6 +129,23 @@ MAME_EXE_NAME=/path/to/mame MAME_CWD=$PWD M2_HLE_GEO_OFF=1 \
 
 The upload takes about 11 minutes there (7 for the interpreter alone). `--seconds` lets the game run on, then reads
 `frameVBL` and saves a snapshot in `./snap`.
+
+## Comparing the board with the host
+
+Build with `-DPAC_DEFS=PAC_DUMP` and the board sends a record every frame over RS-422:
+the Z80's PC and SP, a check of the ROM image and the RAM page at 0x4D00. With idle inputs
+the game is deterministic, so the first frame where it parts from the host build is where
+the board goes wrong:
+
+```sh
+cc -O2 -Isrc -o pachost tools/pachost.c
+PACHOST_TRACE=/dev/shm/ht.bin ./pachost 30000 /dev/null
+python3 tools/pacdump.py /dev/ttyUSB0 --out dumps --seconds 420 --host /dev/shm/ht.bin --rom pac.rom
+```
+
+It costs about 3 ms a frame. It found the attract freeze: the board garbles unaligned word
+and halfword accesses (MAME doesn't), and GCC made them from byte pairs in the Z80 core.
+The build now uses `-mstrict-alignment`.
 
 ## Checking the EPROMs
 

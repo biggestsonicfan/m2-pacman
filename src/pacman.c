@@ -125,10 +125,31 @@ static void pac_linear_tilepal(void) {
 }
 
 #ifdef PAC_RAM2
+/* Back to the geoserial manager: set the kernel's break-in request (m2-sdk m2_fault.h
+ * M2_BREAK @0x5F0020, +4), and its vblank ISR aborts us at the next vblank. First hand the
+ * screen back as the manager set it up: its recovery (m2-x11 gs_fault.h
+ * gs_recover_to_monitor) redraws its text, but doesn't reload the font that tfb_init
+ * turned into framebuffer cells, nor the colour ramp pac_linear_tilepal changed, so on the
+ * board (2026-10-20) TEST brought back a black screen with scraps of Pac-Man's panel where
+ * the manager's text should be. The ramp is rebuilt the way the kernel built it (m2_init,
+ * then m2_color_init's two fills). Never returns: we spin until the ISR takes us, so the
+ * abort can't land between m2_frame_begin and m2_frame_commit. */
+static void pac_exit(void) {
+    u16 sp = m2_tile(0, 0x20);
+    int k;
+    m2__build_colorxlat();
+#ifdef PAC_SHARC
+    m2__fill_colorxlat();
+    m2__fill_scr_colorxlat();
+#endif
+    m2_loadfont();
+    for (k = 0; k < 0x2000; k++) { M2_TILE_FG[k] = sp; M2_TILE_BG[k] = sp; }
+    ((volatile u32 *)0x005F0020u)[1] = 1u;
+    for (;;) { }
+}
+
 /* Leave for the geoserial manager when the host sends "PACX" over the RS-422 link
- * (tools/ram2_upload.py --exit): set the kernel's break-in request (m2-sdk m2_fault.h
- * M2_BREAK @0x5F0020, +4), and its vblank ISR aborts us at the next vblank. RAM stays as
- * it was, so geoserial can PEEK the game's state. (The ISR's own button check is IN0
+ * (tools/ram2_upload.py --exit): pac_exit. RAM stays as it was, so geoserial can PEEK the game's state. (The ISR's own button check is IN0
  * bit 2, TEST, not SERVICE.) Silicon only: MAME's 315-5649 needs a strobe to deliver a
  * byte; there, poke the request through the bridge. */
 static u8 pac_exit_seen;
@@ -142,10 +163,7 @@ static void pac_host_poll(void) {
         else return;
         pac_exit_seen = b == (u8)key[pac_exit_seen] ? (u8)(pac_exit_seen + 1u)
                       : b == (u8)key[0] ? 1u : 0u;
-        if (pac_exit_seen == 4u) {
-            ((volatile u32 *)0x005F0020u)[1] = 1u;
-            pac_exit_seen = 0;
-        }
+        if (pac_exit_seen == 4u) pac_exit();
     }
 }
 #define PAC_HOST_POLL() pac_host_poll()
@@ -155,40 +173,49 @@ static void pac_host_poll(void) {
 
 /* ---- sound: the Namco WSG on the SCSP -------------------------------------------------
  * With snd/scsp_passthru.s on the sound board (tools/m2_load.lua loads it), the i960 plays
- * the WSG itself: the eight 32-sample waveforms (1m PROM) go to sound RAM once, and SCSP
- * slots 0-2 loop them forever; each frame only a voice's pitch, level and waveform change.
+ * the WSG itself: the eight 32-sample waveforms (1m PROM) go to sound RAM once, and each
+ * voice gets eight SCSP slots (slot v*8+w loops waveform w forever); each frame only the
+ * pitch and level of a voice's slots change. A voice changes waveform by muting one slot
+ * and unmuting another, never by rewriting a playing slot's start address: MAME's SCSP reads
+ * SA on every sample, but a board's evidently takes it at key-on only (2026-10-20: sounds
+ * kept the waveform they started with).
  * WSG (MAME sound/namco.cpp pacman_sound_w): 96 kHz, a 20-bit phase step `f` per clock,
  * top 5 bits index the waveform, so a slot plays f * 96000 * 32 / 2^20 = f * 375/128
  * samples/s; as a step per 44.1 kHz sample in 20-bit fixed point that is f * 69.66
  * (f * 1393 / 20, which stays inside 32 bits). Volume 0-15 is amplitude, mapped to SCSP TL
  * (0.4/0.8/1.5/3/6/12/24/48 dB bits, MAME sound/scsp.cpp) by the nearest attenuation. */
 #define PAC_SND_WAVES 0x1000u            /* sound RAM: 8 x 32 16-bit samples */
+#define PAC_SND_SLOT(v, w) M2_SCSP_SLOT((v) * 8 + (w))
 static const u8 pac_snd_tl[16] = { 255, 63, 47, 37, 30, 25, 21, 18, 14, 12, 9, 7, 5, 3, 1, 0 };
-static u16 pac_snd_sent[3][3];           /* per voice: pitch, TL, SA last sent */
+static u16 pac_snd_pitch[3][8];          /* per slot: pitch last sent */
+static u8 pac_snd_wave[3], pac_snd_lvl[3]; /* per voice: the slot that may sound, its TL */
 static int pac_snd_ok;                   /* passthrough answered the probe */
 
 static void pac_sound_init(void) {
-    int v, i;
+    int v, w, i;
     m2_scsp_init();
     pac_snd_ok = m2_scsp_probe(90);      /* ~1.5 s: the sound board boots alongside us */
     if (!pac_snd_ok) return;             /* a game's sound program: send it nothing */
     for (i = 0; i < 256; i++)            /* 4-bit unsigned -> 16-bit signed */
         m2_scsp_ram_w(PAC_SND_WAVES + (u32)i * 2u, (u16)(((int)(pac_prom_snd[i] & 15) - 8) * 384));
     for (v = 0; v < 3; v++) {
-        u32 sl = M2_SCSP_SLOT(v);
-        m2_scsp_w(sl + 0x02, (u16)PAC_SND_WAVES);   /* SA (low 16 bits)              */
-        m2_scsp_w(sl + 0x04, 0);                    /* LSA                           */
-        m2_scsp_w(sl + 0x06, 32);                   /* LEA: a 32-sample loop         */
-        m2_scsp_w(sl + 0x08, 0x001F);               /* AR max, no decay              */
-        m2_scsp_w(sl + 0x0A, 0x3C1F);               /* KRS off, DL 0, RR max         */
-        m2_scsp_w(sl + 0x0C, 255);                  /* TL: silent until the game sets it */
-        m2_scsp_w(sl + 0x10, 0);                    /* pitch                         */
-        m2_scsp_w(sl + 0x16, 0xE000);               /* DISDL 7 (0 dB), centre        */
-        m2_scsp_w(sl + 0x00, 0x0820);               /* KYONB, LPCTL normal loop, 16-bit */
-        pac_snd_sent[v][0] = 0; pac_snd_sent[v][1] = 255; pac_snd_sent[v][2] = (u16)PAC_SND_WAVES;
+        for (w = 0; w < 8; w++) {
+            u32 sl = PAC_SND_SLOT(v, w);
+            m2_scsp_w(sl + 0x02, (u16)(PAC_SND_WAVES + (u32)w * 64u)); /* SA (low 16 bits) */
+            m2_scsp_w(sl + 0x04, 0);                    /* LSA                           */
+            m2_scsp_w(sl + 0x06, 32);                   /* LEA: a 32-sample loop         */
+            m2_scsp_w(sl + 0x08, 0x001F);               /* AR max, no decay              */
+            m2_scsp_w(sl + 0x0A, 0x3C1F);               /* KRS off, DL 0, RR max         */
+            m2_scsp_w(sl + 0x0C, 255);                  /* TL: silent until the game sets it */
+            m2_scsp_w(sl + 0x10, 0);                    /* pitch                         */
+            m2_scsp_w(sl + 0x16, 0xE000);               /* DISDL 7 (0 dB), centre        */
+            m2_scsp_w(sl + 0x00, 0x0820);               /* KYONB, LPCTL normal loop, 16-bit */
+            pac_snd_pitch[v][w] = 0;
+        }
+        pac_snd_wave[v] = 0; pac_snd_lvl[v] = 255;
     }
-    m2_scsp_w(M2_SCSP_SLOT(0) + 0x00, 0x1820);      /* KYONEX: key the three slots on */
-    m2_scsp_pump();   /* ~1950 bytes queued: the vblank waits send them (~0.6 s) while the
+    m2_scsp_w(M2_SCSP_SLOT(0) + 0x00, 0x1820);      /* KYONEX: key the 24 slots on */
+    m2_scsp_pump();   /* ~3100 bytes queued: the vblank waits send them (~1 s) while the
                        * game boots; its first sound comes much later, after a coin */
 }
 
@@ -200,15 +227,20 @@ static void pac_sound_update(void) {
         u32 f = (u32)r[v * 5 + 0x11] << 4 | (u32)r[v * 5 + 0x12] << 8
               | (u32)r[v * 5 + 0x13] << 12 | (u32)r[v * 5 + 0x14] << 16;
         u32 vol = pac_snd_on ? r[v * 5 + 0x15] : 0;
-        u16 pitch, tl, sa;
+        u32 w = r[v * 5 + 0x05] & 7u, old = pac_snd_wave[v];
+        u16 pitch;
+        u8 tl;
         if (v == 0) f |= r[0x10];
         if (!f) vol = 0;
         pitch = m2_scsp_pitch_fx(f * 1393u / 20u);
         tl = pac_snd_tl[vol & 15];
-        sa = (u16)(PAC_SND_WAVES + (r[v * 5 + 0x05] & 7u) * 64u);
-        if (vol && pitch != pac_snd_sent[v][0]) { m2_scsp_w(M2_SCSP_SLOT(v) + 0x10, pitch); pac_snd_sent[v][0] = pitch; }
-        if (sa != pac_snd_sent[v][2])           { m2_scsp_w(M2_SCSP_SLOT(v) + 0x02, sa); pac_snd_sent[v][2] = sa; }
-        if (tl != pac_snd_sent[v][1])           { m2_scsp_w(M2_SCSP_SLOT(v) + 0x0C, tl); pac_snd_sent[v][1] = tl; }
+        if (vol && pitch != pac_snd_pitch[v][w]) { m2_scsp_w(PAC_SND_SLOT(v, w) + 0x10, pitch); pac_snd_pitch[v][w] = pitch; }
+        if (w != old) {                  /* the new waveform's slot sounds, then the old stops */
+            if (tl != 255) m2_scsp_w(PAC_SND_SLOT(v, w) + 0x0C, tl);
+            if (pac_snd_lvl[v] != 255) m2_scsp_w(PAC_SND_SLOT(v, old) + 0x0C, 255);
+            pac_snd_wave[v] = (u8)w;
+        } else if (tl != pac_snd_lvl[v]) m2_scsp_w(PAC_SND_SLOT(v, w) + 0x0C, tl);
+        pac_snd_lvl[v] = tl;
     }
     m2_scsp_pump();
 }
@@ -463,6 +495,43 @@ static void pac_pf_show(u32 vblanks, u8 ink) {
  * - The panel shows the raw inputs (IN0 bank 0, IN0 bank 1, IN1) as they change, and
  *   every second the Z80's PC. */
 static u8 pac_test_armed, pac_test_held;
+
+/* Every frame, a record of the Z80 to the host (tools/pacdump.py), so the frame where the
+ * board parts from the host build shows: "PACF", the frame count, PC, SP, a 1 KB slice
+ * of the ROM image (frame & 15) and its 32-bit sum, the 8 ROM bytes at 0x340B (a speed
+ * pattern the board has been seen to copy as zeros), the 256 bytes of RAM at 0x4D00 (the
+ * game's state: speed patterns, timers, positions), then a 16-bit byte sum. Sent the way the kernel's rs422_putc sends (m2-x11 gs_serial.h): wait for
+ * each TX buffer to empty, no wait for the peer; the wire carries a 0x07 strobe before each.
+ * About 3 ms a frame, so only with -DPAC_DEFS=PAC_DUMP. */
+#ifdef PAC_DUMP
+#define PAC_DUMP_LEN (25u + 0x100u + 2u)
+static u32 pac_dump_frame;
+static void pac_tx(u8 b) {
+    u32 n;
+    for (n = 0; (M2_IO.flag & 0x02u) && n < 100000u; n++) { }
+    M2_IO.txd2 = b;
+    for (n = 0; (M2_IO.flag & 0x01u) && n < 100000u; n++) { }
+    M2_IO.txd1 = 0x07u;
+}
+static void pac_dump_step(void) {
+    u8 d[PAC_DUMP_LEN];
+    u32 i, sum = 0, f = pac_dump_frame++;
+    d[0] = 'P'; d[1] = 'A'; d[2] = 'C'; d[3] = 'F';
+    for (i = 0; i < 4; i++) d[4 + i] = (u8)(f >> (8 * i));
+    d[8] = (u8)z80.pc; d[9] = (u8)(z80.pc >> 8);
+    d[10] = (u8)z80.sp; d[11] = (u8)(z80.sp >> 8);
+    d[12] = (u8)(f & 15u);
+    for (i = 0; i < 0x400u; i++) sum += pac_rom[(f & 15u) * 0x400u + i];
+    for (i = 0; i < 4; i++) d[13 + i] = (u8)(sum >> (8 * i));
+    for (i = 0; i < 8; i++) d[17 + i] = pac_rom[0x340Bu + i];
+    for (i = 0; i < 0x100u; i++) d[25 + i] = pac_ram[0xD00u + i];
+    sum = 0;
+    for (i = 0; i < PAC_DUMP_LEN - 2u; i++) sum += d[i];
+    d[PAC_DUMP_LEN - 2u] = (u8)sum;
+    d[PAC_DUMP_LEN - 1u] = (u8)(sum >> 8);
+    for (i = 0; i < PAC_DUMP_LEN; i++) pac_tx(d[i]);
+}
+#endif
 static void pac_hex(char *s, u32 v, int n) {
     int i;
     for (i = 0; i < n; i++) s[i] = "0123456789ABCDEF"[(v >> (4 * (n - 1 - i))) & 15];
@@ -477,10 +546,7 @@ static void pac_board_watch(u8 ink, u32 frames) {
     M2_IO.bank = 0;
     test = !(pac_raw_sys & M2_IN0_TEST) || !(b1 & 0x80u);
     if (!test) { pac_test_armed = 1; pac_test_held = 0; }
-    else if (pac_test_armed && ++pac_test_held >= 15) {
-        ((volatile u32 *)0x005F0020u)[1] = 1u;      /* M2_BREAK->request: the ISR aborts us */
-        pac_test_armed = 0;
-    }
+    else if (pac_test_armed && ++pac_test_held >= 15) pac_exit();
     now = ((u32)pac_raw_sys << 16) | ((u32)b1 << 8) | pac_raw_p1;
     if (now != shown) {
         shown = now;
@@ -493,6 +559,9 @@ static void pac_board_watch(u8 ink, u32 frames) {
         tfb_fillrect(8, 360, 10 * 8, 8, 0);
         tfb_text(8, 360, s, ink, -1);
     }
+#ifdef PAC_DUMP
+    pac_dump_step();
+#endif
 }
 #define PAC_BOARD_WATCH(ink, f) pac_board_watch((u8)(ink), f)
 #else

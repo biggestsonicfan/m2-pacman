@@ -13,7 +13,7 @@
 |
 | A command byte in the middle of a packet starts a new one, so a lost byte costs one packet.
 | The 68000 sleeps in STOP; a byte in the MIDI FIFO raises the SCSP's MIDI interrupt (SCIEB
-| bit 3, level 3 through SCILV0/1), whose handler drains the FIFO and goes back to sleep. A
+| bit 3, level 3 through SCILV0/1), whose handler takes one byte and goes back to sleep. A
 | stopped 68000 costs an emulator nothing, where a polling one costs it every instruction
 | (MAME sound/scsp.cpp CheckPendingIRQ: the line is held while the FIFO has bytes and drops
 | when a read empties it).
@@ -41,8 +41,14 @@ _start:
         dbra    %d7, 0b
 
         lea     0x100000, %a5           | SCSP registers
-        move.w  #0x0300, 0x400(%a5)     | MEM4MB (512 KB of 4 Mbit DRAM), DAC18B, MVOL 0
-                                        | until every slot is silent (STF: 3 to 0x400)
+        moveq   #15, %d7                | MEM4MB (512 KB of 4 Mbit DRAM), DAC18B, MVOL 0
+7:      move.w  #0x0300, 0x400(%a5)     | until every slot is silent (STF: 3 to 0x400).
+        clr.l   0x40000                 | STF then checks that 0x40000 no longer mirrors 0
+        move.l  #0x12345678, 0          | and writes it again if it does (0x601284); a
+        cmpi.l  #0x12345678, 0x40000    | mirrored stack top would land on the vectors.
+        dbne    %d7, 7b                 | (Bounded here: on 1 Mbit RAM it would loop forever.)
+        moveq   #0x1E, %d3              | d3 = control latch. Its LED bits (0-3) show how
+        move.b  %d3, 0x400001           | far the boot got, the way STF steps 0x1E, 0x1C ..
         clr.w   0x41E(%a5)              | SCIEB: no SCSP interrupt sources yet
         clr.w   0x42A(%a5)              | MCIEB: none to the main CPU
         move.w  #0x07FF, 0x422(%a5)     | SCIRE: clear anything pending
@@ -60,6 +66,8 @@ _start:
         move.w  #0x00FF, 0x0C-0x20(%a0) | TL 0xFF: silent
         dbra    %d7, 1b
         move.w  #0x1000, (%a5)          | KYONEX: apply (all off)
+        moveq   #0x1C, %d3              | LEDs: slots silent
+        move.b  %d3, 0x400001
 
         | The effect DSP: its program RAM (MPRO) comes up holding garbage, and a garbage
         | step with MWT set writes the ring buffer in sound RAM: from RBP x 8 KB, i.e.
@@ -101,6 +109,8 @@ _start:
         clr.w   0x428(%a5)              | SCILV2
         move.w  #0x0008, 0x422(%a5)     | SCIRE: drop a MIDI interrupt the flush left
         move.w  #0x0008, 0x41E(%a5)     | SCIEB: MIDI input interrupt on
+        moveq   #0x18, %d3              | LEDs: listening (a ping toggles bit 3)
+        move.b  %d3, 0x400001
 
 idle:   stop    #0x2000                 | sleep, interrupts enabled
         bra.s   idle
@@ -110,11 +120,11 @@ spurious:
 
 | ---- level 3: drain the MIDI FIFO through the packet parser (state lives in d2/d4-d6)
 midi_irq:
-poll:   move.w  0x420(%a5), %d0         | SCIPD
-        btst    #3, %d0                 | MIDI input pending?
-        beq     done
-        moveq   #0, %d0
-        move.b  0x405(%a5), %d0         | pop one byte
+        moveq   #0, %d0                 | one byte per interrupt, as STF does (0x6017A8):
+        move.b  0x405(%a5), %d0         | the line stays up while the FIFO holds more. No
+        cmp.b   #0xFF, %d0              | SCIPD polling: a board's flag may lag the read,
+        beq     done                    | and an empty FIFO's 0xFF (never sent; STF drops
+        tst.b   %d0                     | it too) would cut the packet in progress short.
         bpl.s   data
         | a command byte
         moveq   #0, %d2
@@ -123,19 +133,21 @@ poll:   move.w  0x420(%a5), %d0         | SCIPD
         cmp.b   #0x90, %d0
         bne.s   1f
         moveq   #5, %d6
-        bra     poll
+        bra     done
 1:      cmp.b   #0xA0, %d0
         bne.s   2f
         moveq   #6, %d6
-        bra     poll
+        bra     done
 2:      moveq   #0, %d5
         cmp.b   #0xF0, %d0
-        bne     poll                    | unknown command: ignore until the next one
+        bne     done                    | unknown command: ignore until the next one
         move.w  #0x005A, 0x406(%a5)     | ping -> MOBUF
-        bra     poll
+        eori.b  #8, %d3                 | and flip an LED
+        move.b  %d3, 0x400001
+        bra     done
 
 data:   tst.b   %d6
-        beq     poll                    | stray data byte
+        beq     done                    | stray data byte
         lsl.l   #7, %d2
         or.b    %d0, %d2
         subq.b  #1, %d6
@@ -145,25 +157,25 @@ data:   tst.b   %d6
         bne.s   1f
         move.l  %d2, %d4
         moveq   #0, %d2
-        bra     poll
+        bra     done
 1:      tst.b   %d6
-        bne     poll
+        bne     done
         and.w   #0x0FFE, %d4
         move.w  %d2, 0(%a5, %d4.w)      | SCSP register write
         moveq   #0, %d5
-        bra     poll
+        bra     done
 
 ram:    cmp.b   #3, %d6                 | 3 address bytes in
         bne.s   1f
         move.l  %d2, %d4
         moveq   #0, %d2
-        bra     poll
+        bra     done
 1:      tst.b   %d6
-        bne     poll
+        bne     done
         and.l   #0x7FFFE, %d4
         move.l  %d4, %a0
         move.w  %d2, (%a0)              | sound RAM write
         moveq   #0, %d5
-        bra     poll
+        bra     done
 
 done:   rte
