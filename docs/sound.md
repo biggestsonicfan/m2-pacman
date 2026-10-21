@@ -103,9 +103,10 @@ costs one packet, never the stream.
 `src/pacman.c` (`pac_sound_init`, `pac_sound_update`):
 
 - **At boot:** the eight 32-sample waveforms of Pac-Man's sound PROM (`1m`) go to sound
-  RAM at `0x1000`, 4-bit unsigned converted to 16-bit signed. SCSP slots 0-2 are set to
-  loop 32 samples forever, attack max, no decay, silent, and keyed on. That is ~1950
-  bytes, sent in the background while the game boots.
+  RAM at `0x1000`, 4-bit unsigned converted to 16-bit signed. Each voice gets eight SCSP
+  slots, slot `voice x 8 + wave` looping that waveform's 32 samples forever: attack max,
+  no decay, silent, and keyed on. That is ~3100 bytes, sent in the background while the
+  game boots.
 - **After every Pac-Man frame:** each voice's WSG registers are decoded as MAME's
   `sound/namco.cpp` does (a 20-bit frequency step, a 4-bit volume, a 3-bit waveform), and
   only what changed is sent:
@@ -113,7 +114,12 @@ costs one packet, never the stream.
     samples/s, which as an SCSP rate per 44.1 kHz output sample is f x 1393/20 in 20-bit
     fixed point, turned into the SCSP's octave + fraction form (`m2_scsp_pitch_fx`)
   - level: volume 0-15 mapped to the nearest SCSP total-level attenuation
-  - waveform: the slot's start address, `0x1000 + wave x 64`
+  - waveform: the voice's slot for that waveform takes the level, and its previous slot
+    goes silent. A playing slot's start address (`SA`) is never rewritten: MAME's SCSP
+    reads it on every sample, but the board's takes it at key-on only. The first build to
+    sound on a board (2026-10-20) changed `SA`, and its sounds kept the waveform they
+    started with: "mostly correct, some sounds playing the wrong sound type". In MAME the
+    two ways sound the same (a slot switch restarts the waveform's phase).
 
 ## What it is based on
 
@@ -199,6 +205,9 @@ order, as the previous program over 30 s with a coin and a start (a write tap on
 - 2026-10-20, upload build: `NO SOUND`. Pinging from the host through the geoserial
   manager (poking `0xF0` into the UART at `0x9C0000` and polling its status) got no
   answer either: the UART sends (status `0x85`), the sound board doesn't answer.
+- 2026-10-20, the one-byte handler burned: the host ping is answered (`0x5A`), a test
+  tone plays, and the game has sound, "mostly correct": some effects and music voices
+  had the wrong waveform (the `SA` rewrite above).
 
 A first hardware test: burn the three EPROMs, boot, and look at the panel. `SCSP SOUND`
 means the 68000 booted, took the MIDI interrupt and answered the ping; then insert a

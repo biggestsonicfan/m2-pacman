@@ -173,40 +173,49 @@ static void pac_host_poll(void) {
 
 /* ---- sound: the Namco WSG on the SCSP -------------------------------------------------
  * With snd/scsp_passthru.s on the sound board (tools/m2_load.lua loads it), the i960 plays
- * the WSG itself: the eight 32-sample waveforms (1m PROM) go to sound RAM once, and SCSP
- * slots 0-2 loop them forever; each frame only a voice's pitch, level and waveform change.
+ * the WSG itself: the eight 32-sample waveforms (1m PROM) go to sound RAM once, and each
+ * voice gets eight SCSP slots (slot v*8+w loops waveform w forever); each frame only the
+ * pitch and level of a voice's slots change. A voice changes waveform by muting one slot
+ * and unmuting another, never by rewriting a playing slot's start address: MAME's SCSP reads
+ * SA on every sample, but a board's evidently takes it at key-on only (2026-10-20: sounds
+ * kept the waveform they started with).
  * WSG (MAME sound/namco.cpp pacman_sound_w): 96 kHz, a 20-bit phase step `f` per clock,
  * top 5 bits index the waveform, so a slot plays f * 96000 * 32 / 2^20 = f * 375/128
  * samples/s; as a step per 44.1 kHz sample in 20-bit fixed point that is f * 69.66
  * (f * 1393 / 20, which stays inside 32 bits). Volume 0-15 is amplitude, mapped to SCSP TL
  * (0.4/0.8/1.5/3/6/12/24/48 dB bits, MAME sound/scsp.cpp) by the nearest attenuation. */
 #define PAC_SND_WAVES 0x1000u            /* sound RAM: 8 x 32 16-bit samples */
+#define PAC_SND_SLOT(v, w) M2_SCSP_SLOT((v) * 8 + (w))
 static const u8 pac_snd_tl[16] = { 255, 63, 47, 37, 30, 25, 21, 18, 14, 12, 9, 7, 5, 3, 1, 0 };
-static u16 pac_snd_sent[3][3];           /* per voice: pitch, TL, SA last sent */
+static u16 pac_snd_pitch[3][8];          /* per slot: pitch last sent */
+static u8 pac_snd_wave[3], pac_snd_lvl[3]; /* per voice: the slot that may sound, its TL */
 static int pac_snd_ok;                   /* passthrough answered the probe */
 
 static void pac_sound_init(void) {
-    int v, i;
+    int v, w, i;
     m2_scsp_init();
     pac_snd_ok = m2_scsp_probe(90);      /* ~1.5 s: the sound board boots alongside us */
     if (!pac_snd_ok) return;             /* a game's sound program: send it nothing */
     for (i = 0; i < 256; i++)            /* 4-bit unsigned -> 16-bit signed */
         m2_scsp_ram_w(PAC_SND_WAVES + (u32)i * 2u, (u16)(((int)(pac_prom_snd[i] & 15) - 8) * 384));
     for (v = 0; v < 3; v++) {
-        u32 sl = M2_SCSP_SLOT(v);
-        m2_scsp_w(sl + 0x02, (u16)PAC_SND_WAVES);   /* SA (low 16 bits)              */
-        m2_scsp_w(sl + 0x04, 0);                    /* LSA                           */
-        m2_scsp_w(sl + 0x06, 32);                   /* LEA: a 32-sample loop         */
-        m2_scsp_w(sl + 0x08, 0x001F);               /* AR max, no decay              */
-        m2_scsp_w(sl + 0x0A, 0x3C1F);               /* KRS off, DL 0, RR max         */
-        m2_scsp_w(sl + 0x0C, 255);                  /* TL: silent until the game sets it */
-        m2_scsp_w(sl + 0x10, 0);                    /* pitch                         */
-        m2_scsp_w(sl + 0x16, 0xE000);               /* DISDL 7 (0 dB), centre        */
-        m2_scsp_w(sl + 0x00, 0x0820);               /* KYONB, LPCTL normal loop, 16-bit */
-        pac_snd_sent[v][0] = 0; pac_snd_sent[v][1] = 255; pac_snd_sent[v][2] = (u16)PAC_SND_WAVES;
+        for (w = 0; w < 8; w++) {
+            u32 sl = PAC_SND_SLOT(v, w);
+            m2_scsp_w(sl + 0x02, (u16)(PAC_SND_WAVES + (u32)w * 64u)); /* SA (low 16 bits) */
+            m2_scsp_w(sl + 0x04, 0);                    /* LSA                           */
+            m2_scsp_w(sl + 0x06, 32);                   /* LEA: a 32-sample loop         */
+            m2_scsp_w(sl + 0x08, 0x001F);               /* AR max, no decay              */
+            m2_scsp_w(sl + 0x0A, 0x3C1F);               /* KRS off, DL 0, RR max         */
+            m2_scsp_w(sl + 0x0C, 255);                  /* TL: silent until the game sets it */
+            m2_scsp_w(sl + 0x10, 0);                    /* pitch                         */
+            m2_scsp_w(sl + 0x16, 0xE000);               /* DISDL 7 (0 dB), centre        */
+            m2_scsp_w(sl + 0x00, 0x0820);               /* KYONB, LPCTL normal loop, 16-bit */
+            pac_snd_pitch[v][w] = 0;
+        }
+        pac_snd_wave[v] = 0; pac_snd_lvl[v] = 255;
     }
-    m2_scsp_w(M2_SCSP_SLOT(0) + 0x00, 0x1820);      /* KYONEX: key the three slots on */
-    m2_scsp_pump();   /* ~1950 bytes queued: the vblank waits send them (~0.6 s) while the
+    m2_scsp_w(M2_SCSP_SLOT(0) + 0x00, 0x1820);      /* KYONEX: key the 24 slots on */
+    m2_scsp_pump();   /* ~3100 bytes queued: the vblank waits send them (~1 s) while the
                        * game boots; its first sound comes much later, after a coin */
 }
 
@@ -218,15 +227,20 @@ static void pac_sound_update(void) {
         u32 f = (u32)r[v * 5 + 0x11] << 4 | (u32)r[v * 5 + 0x12] << 8
               | (u32)r[v * 5 + 0x13] << 12 | (u32)r[v * 5 + 0x14] << 16;
         u32 vol = pac_snd_on ? r[v * 5 + 0x15] : 0;
-        u16 pitch, tl, sa;
+        u32 w = r[v * 5 + 0x05] & 7u, old = pac_snd_wave[v];
+        u16 pitch;
+        u8 tl;
         if (v == 0) f |= r[0x10];
         if (!f) vol = 0;
         pitch = m2_scsp_pitch_fx(f * 1393u / 20u);
         tl = pac_snd_tl[vol & 15];
-        sa = (u16)(PAC_SND_WAVES + (r[v * 5 + 0x05] & 7u) * 64u);
-        if (vol && pitch != pac_snd_sent[v][0]) { m2_scsp_w(M2_SCSP_SLOT(v) + 0x10, pitch); pac_snd_sent[v][0] = pitch; }
-        if (sa != pac_snd_sent[v][2])           { m2_scsp_w(M2_SCSP_SLOT(v) + 0x02, sa); pac_snd_sent[v][2] = sa; }
-        if (tl != pac_snd_sent[v][1])           { m2_scsp_w(M2_SCSP_SLOT(v) + 0x0C, tl); pac_snd_sent[v][1] = tl; }
+        if (vol && pitch != pac_snd_pitch[v][w]) { m2_scsp_w(PAC_SND_SLOT(v, w) + 0x10, pitch); pac_snd_pitch[v][w] = pitch; }
+        if (w != old) {                  /* the new waveform's slot sounds, then the old stops */
+            if (tl != 255) m2_scsp_w(PAC_SND_SLOT(v, w) + 0x0C, tl);
+            if (pac_snd_lvl[v] != 255) m2_scsp_w(PAC_SND_SLOT(v, old) + 0x0C, 255);
+            pac_snd_wave[v] = (u8)w;
+        } else if (tl != pac_snd_lvl[v]) m2_scsp_w(PAC_SND_SLOT(v, w) + 0x0C, tl);
+        pac_snd_lvl[v] = tl;
     }
     m2_scsp_pump();
 }
