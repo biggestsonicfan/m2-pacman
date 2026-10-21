@@ -34,10 +34,11 @@ set(M2_STARTUP_ASM
 
 # -DPAC_RAM2=ON: an image to upload over geoserial (tools/ram2_upload.py) instead of the
 # EPROM pair. The code runs in main RAM, in the kernel's upload store (0x580000, 320 KB),
-# the working memory (.bss) is RAM2 (0x200000); the kernel keeps the boot and the vblank
-# ISR, so no startup asm here. The recompiled Z80 code (0xC6140 bytes in all) and the
-# SHARC firmware don't fit, so it's the interpreter and the tile plane only.
-option(PAC_RAM2 "Build a geoserial-uploadable image, .bss in RAM2 (lib/ram2.ld), not the EPROMs" OFF)
+# the working memory (.bss) in the kernel's app run area at 0x541000 (not RAM2, which the
+# real board doesn't keep; the option's name is older); the kernel keeps the boot and the vblank
+# ISR, so no startup asm here. The SHARC firmware doesn't fit, so it's the tile plane; of
+# the recompiled Z80 code (0xC6140 bytes in all) only the hottest part (below).
+option(PAC_RAM2 "Build a geoserial-uploadable image (lib/ram2.ld), not the EPROMs" OFF)
 if(PAC_RAM2)
     set(M2_STARTUP_ASM "")
 endif()
@@ -53,8 +54,22 @@ set(PAC_DEFS "" CACHE STRING "Extra -D for the game (e.g. PAC_NO_PANEL)")
 if(PAC_DEFS)
     target_compile_definitions(game.elf PRIVATE ${PAC_DEFS})
 endif()
+# PAC_RAM2: the hottest Z80 code recompiled (src/<game>_ram2_recomp.h, tools/ram2/hot.py:
+# ~1100 addresses that take 98.5% of the Z80's cycles), the rest interpreted. The whole
+# recompiled ROM doesn't fit in the upload store. -DPAC_RAM2_RC=<header> picks another,
+# -DPAC_RAM2_RC=none the interpreter alone.
+set(PAC_RAM2_RC "" CACHE STRING "PAC_RAM2: recompiled-code header (default src/<game>_ram2_recomp.h; none)")
 if(PAC_RAM2)
-    target_compile_definitions(game.elf PRIVATE PAC_RAM2 PAC_NO_RECOMP PAC_NO_SHARC)
+    target_compile_definitions(game.elf PRIVATE PAC_RAM2 PAC_NO_SHARC)
+    set(PAC_RC "${PAC_RAM2_RC}")
+    if(NOT PAC_RC AND EXISTS "${CMAKE_SOURCE_DIR}/src/${M2_GAME}_ram2_recomp.h")
+        set(PAC_RC "${M2_GAME}_ram2_recomp.h")
+    endif()
+    if(PAC_RC AND NOT PAC_RC STREQUAL "none")
+        target_compile_definitions(game.elf PRIVATE "PAC_RC_HDR=\"${PAC_RC}\"")
+    else()
+        target_compile_definitions(game.elf PRIVATE PAC_NO_RECOMP)
+    endif()
     set(PAC_LD "${CMAKE_SOURCE_DIR}/lib/ram2.ld")
 else()
     set(PAC_LD "${M2_SDK}/lib/testlinkrom_elf.ld")

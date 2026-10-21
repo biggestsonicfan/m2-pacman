@@ -30,29 +30,62 @@ vectors:
 
 _start:
         move.w  #0x2700, %sr            | interrupts off while setting up
+        lea     0x80000, %sp            | a restart from an error vector drops its frame
+        move.b  #0x1F, 0x400001         | sound board control: bit 4 on, LEDs (bits 0-3) off.
+                                        | STF's program keeps bit 4 set while it runs and
+                                        | clears it only in its error-blink loop: the
+                                        | board's audio output. MAME: sample banking only.
+        move.w  #0x1500, %d7            | let the board settle before touching the SCSP:
+0:      ror.l   #8, %d1                 | STF spins the same ~30 ms first (0x60122A)
+        ror.l   #8, %d1
+        dbra    %d7, 0b
+
         lea     0x100000, %a5           | SCSP registers
-        move.w  #0x000F, 0x400(%a5)     | MVOL = 15, 16-bit DAC, 512 KB RAM mode
+        move.w  #0x0300, 0x400(%a5)     | MEM4MB (512 KB of 4 Mbit DRAM), DAC18B, MVOL 0
+                                        | until every slot is silent (STF: 3 to 0x400)
         clr.w   0x41E(%a5)              | SCIEB: no SCSP interrupt sources yet
         clr.w   0x42A(%a5)              | MCIEB: none to the main CPU
         move.w  #0x07FF, 0x422(%a5)     | SCIRE: clear anything pending
 
-        | all 32 slots silent: key off (KYONB = 0, KYONEX on the last write)
+        | All 32 slots silent, every register set. MAME clears them at reset; a board's
+        | power-up values are unknown, and a stray MDL (0x0E) or LFO depth (0x12) left in
+        | a slot the i960 later keys on would modulate it. STF sets TL 0xFF, RR 0x1F, key
+        | off (0x6013B6).
         move.l  %a5, %a0
         moveq   #31, %d7
-1:      clr.w   (%a0)
-        move.w  #0x0000, 0x0C(%a0)      | TL 0
-        clr.w   0x16(%a0)               | DISDL/DIPAN 0: no direct output
-        lea     0x20(%a0), %a0
+1:      moveq   #15, %d6
+2:      clr.w   (%a0)+                  | the slot's 16 registers (0x16 too: no direct or
+        dbra    %d6, 2b                 | DSP output)
+        move.w  #0x001F, 0x0A-0x20(%a0) | RR max
+        move.w  #0x00FF, 0x0C-0x20(%a0) | TL 0xFF: silent
         dbra    %d7, 1b
         move.w  #0x1000, (%a5)          | KYONEX: apply (all off)
 
-        | exception vectors live in sound RAM (only the first 16 bytes come from ROM):
-        | every autovector -> a bare RTE, level 3 -> the MIDI handler
-        lea     0x64, %a0               | autovectors 1-7 (0x64-0x7C)
-        moveq   #6, %d7
-2:      move.l  #spurious, (%a0)+
-        dbra    %d7, 2b
-        move.l  #spurious, 0x60         | spurious interrupt
+        | The effect DSP: its program RAM (MPRO) comes up holding garbage, and a garbage
+        | step with MWT set writes the ring buffer in sound RAM: from RBP x 8 KB, i.e.
+        | over these vectors and the i960's waveforms at 0x1000 with RBP 0. Zero
+        | COEF/MADRS/MPRO (0x700-0xBFF; a zero step writes nothing), and put the 8K-word
+        | ring buffer at 0x70000-0x73FFF, clear of everything (STF loads its own effects
+        | program here and puts its ring at 0x70000, 0x6013B0).
+        lea     0x700(%a5), %a0
+        move.w  #(0xC00-0x700)/4-1, %d7
+3:      clr.l   (%a0)+
+        dbra    %d7, 3b
+        move.w  #0x0038, 0x402(%a5)     | RBL 0 (8K words), RBP 0x38
+
+        move.b  #15, 0x401(%a5)         | MVOL 15 (STF: 15 to 0x401)
+
+        | exception vectors live in sound RAM, which comes up holding garbage: every
+        | vector restarts the program, except the autovectors (a bare RTE) and level 3
+        | (the MIDI handler). STF copies a whole table there (0x60133A).
+        lea     0x08, %a0               | bus error .. vector 63
+        moveq   #64-2-1, %d7
+4:      move.l  #_start, (%a0)+
+        dbra    %d7, 4b
+        lea     0x60, %a0               | spurious, autovectors 1-7 (0x60-0x7C)
+        moveq   #7, %d7
+5:      move.l  #spurious, (%a0)+
+        dbra    %d7, 5b
         move.l  #midi_irq, 0x6C         | level 3
 
         moveq   #0, %d5                 | d5 = command (0 = waiting for one)
@@ -60,9 +93,13 @@ _start:
         moveq   #0, %d2                 | d2 = accumulator
         moveq   #0, %d4                 | d4 = address
 
+        moveq   #3, %d7                 | empty the 4-byte MIDI input FIFO of anything that
+6:      tst.b   0x405(%a5)              | came before us (STF reads it 4 times, 0x601404)
+        dbra    %d7, 6b
         move.w  #0x0008, 0x424(%a5)     | SCILV0 bit 3 \  MIDI interrupt -> level 3
-        move.w  #0x0008, 0x426(%a5)     | SCILV1 bit 3 /
+        move.w  #0x0008, 0x426(%a5)     | SCILV1 bit 3 /   (STF: the same level, 0x6013DA)
         clr.w   0x428(%a5)              | SCILV2
+        move.w  #0x0008, 0x422(%a5)     | SCIRE: drop a MIDI interrupt the flush left
         move.w  #0x0008, 0x41E(%a5)     | SCIEB: MIDI input interrupt on
 
 idle:   stop    #0x2000                 | sleep, interrupts enabled

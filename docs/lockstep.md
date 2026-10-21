@@ -59,6 +59,47 @@ What the remaining differences are:
   SCSP play the same waveforms (a different chip, resampling and volume curve). The
   11 ms is the trip over the serial line to the sound board (~2 ms per register write).
 
+What this does not check: the pictures compared are the port's own 8-bit framebuffer
+(`pac_fb`, Pac-Man palette indices), not the colours a monitor shows. Those go on through
+the Model 2's tile palette, colour-translation table and gamma, which this MAME models
+from one guess (it reads colorxlat pen 0x40) and a real board does its own way; the same
+holds for the sound board past the SCSP's registers. Both need a look at the board.
+
+## The upload build (`PAC_RAM2`)
+
+The image uploaded over geoserial ([upload.md](upload.md)) runs the same game code from
+main RAM, with only the hottest Z80 code recompiled. `upload.py` records it: MAME's
+Model 2 driver boots the geoserial kernel, the image goes up over the emulated serial line
+(about 11 minutes), `port.lua` is installed through claude_mame's bridge, and only then
+is pacboot launched, so the recorder sees Pac-Man's first frame. The reference is
+`ref.lua`'s, as above (run it first, or reuse a `ref.*` from another run).
+
+```sh
+MAME_EXE_NAME=mame-with-model2 MAME_CWD=<scratch> M2_HLE_GEO_OFF=1 \
+LS_TOOLS=tools/lockstep LS_OUT=<dir with ref.*> LS_FRAMES=6000 \
+  python3 tools/lockstep/upload.py --rompath "<kernel dir>;<stock roms>"
+python3 tools/lockstep/compare.py <dir> src/pacman_roms.h
+```
+
+`<kernel dir>/sfight` holds the geoserial kernel's pair (`epr-19001.15`, `epr-19002.16`)
+and Pac-Man's sound EPROM (`roms/pacman/epr-19021.31`); `$LS_OUT/port.syms` comes from
+the build's `game.elf`, as in `run.sh`.
+
+Results, 6000 frames (2026-10-19), with the 1097-address partial recompile and with the
+interpreter alone:
+
+| What | partial recompile | interpreter alone |
+|---|---|---|
+| Z80 registers at all 5707 IRQs | identical | identical |
+| Board, WSG registers and voices, 6000 frames | identical | identical |
+| SCSP: 2854 register writes | all, same order, 4.7-145 ms (mean 10.1) after their frame starts | all, same order, mean 15.9 ms |
+| Audio | trails by 13 ms; loudness 0.954; spectrum >= 0.9 in 91% | trails by 15 ms; loudness 0.913; >= 0.9 in 80% |
+| Memory | 5992 frames byte-exact (the same 8 frame-edge instructions) | the same |
+| Pictures | 95 of 100 identical | 93 of 100 |
+
+The game is the same; the differences are the ones explained above. The faster build
+gets more of its sound out in time (the SCSP writes go out while it waits for vblank).
+
 ## What it took
 
 Matching MAME needed, in the Z80 core and the board:

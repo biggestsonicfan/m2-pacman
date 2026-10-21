@@ -48,7 +48,9 @@
 
 #ifndef PAC_ROMS                       /* src/puckman.c picks the other set */
 #define PAC_ROMS   "pacman_roms.h"
+#ifndef PAC_RC_HDR                     /* -DPAC_RC_HDR: another recompiled header (PAC_RAM2_RC) */
 #define PAC_RC_HDR "pacman_recomp.h"
+#endif
 #define PAC_NAME   "PAC-MAN"
 #endif
 #if __has_include(PAC_ROMS)
@@ -72,6 +74,10 @@
 #define PAC_COL0 17                    /* Pac-Man screen origin on the tile plane, in cells */
 #define PAC_ROW0 6
 
+#ifdef PAC_RAM2
+static u8 pac_raw_sys = 0xff, pac_raw_p1 = 0xff;   /* this frame's IN0 and IN1, for pac_board_watch */
+#endif
+
 /* Model 2 inputs -> Pac-Man IN0/IN1 (all active-low on both boards) */
 static void pac_read_inputs(void) {
     u8 sys, p1, p2, in0 = 0xff, in1 = 0xff;
@@ -92,24 +98,60 @@ static void pac_read_inputs(void) {
     if (!(sys & M2_IN0_START2)) in1 &= ~0x40;
     pac_in0 = in0;
     pac_in1 = in1;                     /* bit 4 test off, bit 7 = upright cabinet */
+#ifdef PAC_RAM2
+    pac_raw_sys = sys; pac_raw_p1 = p1;
+#endif
 }
 
 /* A tile-palette write goes through the colour-translation table: each 5-bit channel c
- * reads colorxlat row c, pen 0x40 (MAME sega/model2.cpp palette_w). m2_init's STF table
- * holds clamp(row * pen) there, which saturates any channel >= 4/31 to full, fine for
- * pure colours but it turns Pac-Man's blue maze white. Pac-Man draws no polygons, so
- * make that one column a straight 0..255 ramp. Must run BEFORE the palette writes
- * (MAME converts a colour when it is written). */
+ * reads colorxlat row c. MAME reads pen 0x40 (sega/model2.cpp palette_w); STF fills pens
+ * 0x40-0x7F of rows 0-31 with one value per row (m2-sdk m2__fill_scr_colorxlat: its
+ * screen-brightness ramp, 22..224), so the board reads one of those, picked by a
+ * brightness we don't know. Make pens 0x30-0xFF of rows 0-31 a straight 0..255 ramp:
+ * STF's ramp starts at 22 and its polygon table saturates at 4/31, both of which wash
+ * Pac-Man's blue maze out. Pens 0-0x2F are left to the polygon table (Pac-Man draws no
+ * polygons). Must run BEFORE the palette writes (MAME converts a colour when written). */
 static void pac_linear_tilepal(void) {
     volatile u16 *R = (volatile u16 *)0x01810000u;
     volatile u16 *G = (volatile u16 *)0x01814000u;
     volatile u16 *B = (volatile u16 *)0x01818000u;
-    u32 c;
+    u32 c, e;
     for (c = 0; c < 32u; c++) {
         u16 v = (u16)((c * 255u + 15u) / 31u);
-        R[c * 0x100u + 0x40u] = v; G[c * 0x100u + 0x40u] = v; B[c * 0x100u + 0x40u] = v;
+        for (e = 0x30u; e < 0x100u; e++) {
+            R[c * 0x100u + e] = v; G[c * 0x100u + e] = v; B[c * 0x100u + e] = v;
+        }
     }
 }
+
+#ifdef PAC_RAM2
+/* Leave for the geoserial manager when the host sends "PACX" over the RS-422 link
+ * (tools/ram2_upload.py --exit): set the kernel's break-in request (m2-sdk m2_fault.h
+ * M2_BREAK @0x5F0020, +4), and its vblank ISR aborts us at the next vblank. RAM stays as
+ * it was, so geoserial can PEEK the game's state. (The ISR's own button check is IN0
+ * bit 2, TEST, not SERVICE.) Silicon only: MAME's 315-5649 needs a strobe to deliver a
+ * byte; there, poke the request through the bridge. */
+static u8 pac_exit_seen;
+static void pac_host_poll(void) {
+    static const char key[4] = { 'P', 'A', 'C', 'X' };
+    int i;
+    for (i = 0; i < 8; i++) {
+        u8 f = M2_IO.flag, b;
+        if (f & 0x04u) b = M2_IO.rxd1;
+        else if (f & 0x08u) b = M2_IO.rxd2;
+        else return;
+        pac_exit_seen = b == (u8)key[pac_exit_seen] ? (u8)(pac_exit_seen + 1u)
+                      : b == (u8)key[0] ? 1u : 0u;
+        if (pac_exit_seen == 4u) {
+            ((volatile u32 *)0x005F0020u)[1] = 1u;
+            pac_exit_seen = 0;
+        }
+    }
+}
+#define PAC_HOST_POLL() pac_host_poll()
+#else
+#define PAC_HOST_POLL() ((void)0)
+#endif
 
 /* ---- sound: the Namco WSG on the SCSP -------------------------------------------------
  * With snd/scsp_passthru.s on the sound board (tools/m2_load.lua loads it), the i960 plays
@@ -339,6 +381,124 @@ static void pac_num(char *s, u32 v, int w) {
 #define pac_panel_clear(y)  tfb_fillrect(8, y, 5 * 8, 8, 0)
 #endif
 
+/* -DPAC_DIAG: the panel shows how far the game got, for a board with no other window into
+ * it: "S" the last step reached (1-8 the boot, 10-17 the main loop), then frameVBL, frames
+ * run and the Z80's PC, redrawn at every step. A hang leaves the step it hung in. */
+#ifdef PAC_DIAG
+static u8 pac_dg_ink = 1;
+static void pac_dg(int y, char tag, u32 v) {
+    char s[11];
+    int i;
+    s[0] = tag; s[1] = ' ';
+    for (i = 0; i < 8; i++) s[2 + i] = "0123456789ABCDEF"[(v >> (28 - 4 * i)) & 15];
+    s[10] = 0;
+    tfb_fillrect(8, y, 10 * 8, 8, 0);
+    tfb_text(8, y, s, pac_dg_ink, -1);
+}
+static void pac_dg_step(u32 step, u32 frames) {
+    pac_dg(200, 'S', step);
+    pac_dg(216, 'V', frameVBL);
+    pac_dg(232, 'F', frames);
+    pac_dg(248, 'P', z80.pc);
+}
+#define PAC_DG(step, frames) pac_dg_step(step, frames)
+/* whether RAM2 keeps what is written: a word every 32 KB of 0x200000-0x23FFFF, then read
+ * them back. "M" 01234567 if all 256 KB are RAM (MAME); the 2B tested read garbage. "B":
+ * bytes 11 22 33 44 stored one at a time at 0x200100, read back as a word (44332211) */
+static void pac_dg_ram2(void) {
+    volatile u32 *w = (volatile u32 *)0x00200000;
+    volatile u8 *b = (volatile u8 *)0x00200100;
+    u32 m = 0;
+    int k;
+    for (k = 0; k < 8; k++) w[k * 0x2000] = 0xA5A5A500u | (u32)k;
+    for (k = 0; k < 8; k++) m = (m << 4) | (w[k * 0x2000] & 15u);
+    b[0] = 0x11; b[1] = 0x22; b[2] = 0x33; b[3] = 0x44;
+    pac_dg(168, 'M', m);
+    pac_dg(184, 'B', *(volatile u32 *)b);
+}
+#else
+#define PAC_DG(step, frames) ((void)0)
+#endif
+
+/* -DPAC_PROF: where the time goes, on the board. Board timer 3 (0x00F0000C) counts down at
+ * 25 MHz from the value written (MAME sega/model2.cpp timers_r/w; its IRQ stays off: the
+ * kernel enables only vblank). Each PAC_PF(k) adds the ticks since the last one to bucket k
+ * and restarts the timer; every 60 vblanks the panel shows each bucket's average per vblank
+ * in thousands of ticks (one Model 2 vblank = 435K): I inputs, Z the Z80 (pac_frame),
+ * S sound, H high score, B the tile copy, W waiting for vblank, O the rest of the loop. */
+#ifdef PAC_PROF
+#define PAC_TIMER (*(volatile u32 *)0x00F0000Cu)
+static u32 pac_pf_t0, pac_pf[7];
+static void pac_pf_mark(int k) {
+    u32 t = PAC_TIMER;
+    pac_pf[k] += (pac_pf_t0 - t) & 0xFFFFFu;
+    PAC_TIMER = 0xFFFFFu;
+    pac_pf_t0 = PAC_TIMER;
+}
+static void pac_pf_show(u32 vblanks, u8 ink) {
+    static const char tag[7] = { 'I', 'Z', 'S', 'H', 'B', 'W', 'O' };
+    char s[8];
+    int k;
+    for (k = 0; k < 7; k++) {
+        s[0] = tag[k]; s[1] = ' ';
+        pac_num(s + 2, (pac_pf[k] / vblanks + 500u) / 1000u, 4);
+        s[6] = 'K'; s[7] = 0;
+        tfb_fillrect(8, 200 + 16 * k, 7 * 8, 8, 0);
+        tfb_text(8, 200 + 16 * k, s, ink, -1);
+        pac_pf[k] = 0;
+    }
+}
+#define PAC_PF(k) pac_pf_mark(k)
+#else
+#define PAC_PF(k) ((void)0)
+#endif
+
+#ifdef PAC_RAM2
+/* Once per Pac-Man frame, for a board we can't see into otherwise:
+ * - TEST returns to the geoserial manager, RAM kept. The kernel's vblank ISR looks for
+ *   TEST at IN0 bit 2 (bank 0), where MAME has it, and on the board (2026-10-19) that
+ *   never fired. STF's read_sw (m2-sdk m2_swio.h) reads TEST from bank 1 instead, bit 7
+ *   (SERVICE bit 6). Watch both; fire only on a press, held 1/4 s, after the bit was
+ *   seen released, so a bit that just reads 0 on some board can't throw us out.
+ * - The panel shows the raw inputs (IN0 bank 0, IN0 bank 1, IN1) as they change, and
+ *   every second the Z80's PC. */
+static u8 pac_test_armed, pac_test_held;
+static void pac_hex(char *s, u32 v, int n) {
+    int i;
+    for (i = 0; i < n; i++) s[i] = "0123456789ABCDEF"[(v >> (4 * (n - 1 - i))) & 15];
+}
+static void pac_board_watch(u8 ink, u32 frames) {
+    static u32 shown = 0xffffffffu;
+    char s[11];
+    u8 b1, test;
+    u32 now;
+    M2_IO.bank = 1;
+    b1 = M2_IO.in0;
+    M2_IO.bank = 0;
+    test = !(pac_raw_sys & M2_IN0_TEST) || !(b1 & 0x80u);
+    if (!test) { pac_test_armed = 1; pac_test_held = 0; }
+    else if (pac_test_armed && ++pac_test_held >= 15) {
+        ((volatile u32 *)0x005F0020u)[1] = 1u;      /* M2_BREAK->request: the ISR aborts us */
+        pac_test_armed = 0;
+    }
+    now = ((u32)pac_raw_sys << 16) | ((u32)b1 << 8) | pac_raw_p1;
+    if (now != shown) {
+        shown = now;
+        s[0] = 'I'; s[1] = ' '; pac_hex(s + 2, now, 6); s[8] = 0;
+        tfb_fillrect(8, 344, 10 * 8, 8, 0);
+        tfb_text(8, 344, s, ink, -1);
+    }
+    if (frames % 60u == 0u) {
+        s[0] = 'P'; s[1] = 'C'; s[2] = ' '; pac_hex(s + 3, z80.pc, 4); s[7] = 0;
+        tfb_fillrect(8, 360, 10 * 8, 8, 0);
+        tfb_text(8, 360, s, ink, -1);
+    }
+}
+#define PAC_BOARD_WATCH(ink, f) pac_board_watch((u8)(ink), f)
+#else
+#define PAC_BOARD_WATCH(ink, f) ((void)0)
+#endif
+
 int main(void) {
     int i, ink = 1, best = -1, late = 0, skipped = 0;
     u32 last, t0, frames = 0, tick = 0;
@@ -351,13 +511,20 @@ int main(void) {
 #endif
     pac_linear_tilepal();              /* after m2_silicon_boot: m2_color_init rebuilds colorxlat */
     tfb_init();
+    PAC_DG(3, 0);
     pac_reset();
+    PAC_DG(4, 0);
     for (i = 0; i < 16; i++) {         /* Pac-Man palette -> tile palette (every FB bank) */
         u8 r, g, b;
         pac_palette_rgb(i, &r, &g, &b);
         tfb_setcolor((u8)i, M2_RGB(r >> 3, g >> 3, b >> 3));
         if (r + g + b > best) { best = r + g + b; ink = i; }
     }
+#ifdef PAC_DIAG
+    pac_dg_ink = (u8)ink;
+    pac_dg_ram2();
+#endif
+    PAC_DG(5, 0);
 #ifdef PAC_GEO_SPRITES
     pac_geo_sprites_init();
 #endif
@@ -371,9 +538,12 @@ int main(void) {
     pac_panel(168, "GEO SPRITES");
 #endif
     pac_panel(112, "SPEED");
+    PAC_DG(6, 0);
     pac_sound_init();
     pac_panel(152, pac_snd_ok ? "SCSP SOUND" : "NO SOUND");
+    PAC_DG(7, 0);
     pac_hiscore_init();
+    PAC_DG(8, 0);
 #ifndef PAC_NO_HISCORE
     if (pac_hi_pending) pac_panel(184, "HI SAVED");
 #endif
@@ -389,7 +559,12 @@ int main(void) {
         tick += PAC_HZ;
         for (n = 0; tick >= M2_HZ; n++) tick -= M2_HZ;
         for (k = 0; k < n; k++) {
+            PAC_DG(0x10, frames);
+            PAC_PF(6);
             pac_read_inputs();
+            PAC_BOARD_WATCH(ink, frames);
+            PAC_DG(0x11, frames);
+            PAC_PF(0);
 #if defined(PAC_GEO_SPRITES)
             pac_frame(render && k == n - 1);
             m2_frame_begin();          /* the sprites, as polygons */
@@ -402,27 +577,44 @@ int main(void) {
 #endif
             pac_frame(render && k == n - 1);
 #endif
+            PAC_DG(0x12, frames);
+            PAC_PF(1);
             pac_sound_update();
+            PAC_DG(0x13, frames);
+            PAC_PF(2);
             pac_hiscore_update();
+            PAC_PF(3);
             frames++;
         }
+        PAC_DG(0x14, frames);
+        PAC_PF(6);
         if (render) pac_blit();
+        PAC_DG(0x15, frames);
+        PAC_PF(4);
         skipped = render ? 0 : skipped + 1;
         late = frameVBL != last;
+        PAC_DG(0x16, frames);
 #ifndef PAC_BENCH                      /* -DPAC_BENCH: run flat out, SPEED shows the headroom */
         while (frameVBL == last) {     /* one vblank's worth per vblank; feed the UART */
             m2_scsp_pump();
+            PAC_HOST_POLL();
 #ifdef PAC_IDLE_SINR
             pac_idle();
 #endif
         }
 #endif
+        PAC_DG(0x17, frames);
+        PAC_HOST_POLL();               /* also when every vblank overruns (no wait above) */
+        PAC_PF(5);
         last = frameVBL;
         if (last - t0 >= 60) {         /* speed = emulated frames vs real Pac-Man time */
             pac_num(buf, frames * (100000u * (M2_HZ / 8u) / (PAC_HZ / 8u)) / ((last - t0) * 1000u), 3);
             buf[3] = '%'; buf[4] = 0;
             pac_panel_clear(128);
             pac_panel(128, buf);
+#ifdef PAC_PROF
+            pac_pf_show(last - t0, (u8)ink);
+#endif
             frames = 0; t0 = last;
         }
     }
